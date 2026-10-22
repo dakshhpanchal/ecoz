@@ -14,6 +14,7 @@ Receives links/text from the phone over HTTPS on the LAN and opens them here.
 Security model: TLS with a self-signed certificate (the phone pins its SHA-256
 fingerprint) plus a random bearer token. Only http/https URLs are ever opened.
 """
+import base64
 import hashlib
 import hmac
 import http.client
@@ -36,6 +37,9 @@ PORT = int(os.environ.get("ECOZ_PORT", "8765"))
 CONF = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "ecoz"
 CERT, KEY, TOKEN_FILE = CONF / "cert.pem", CONF / "key.pem", CONF / "token"
 MAX_BODY = 64 * 1024
+MAX_NOTIFICATION_BODY = 768 * 1024  # notifications may carry an app icon and a picture
+MAX_IMAGE = 400 * 1024
+CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "ecoz" / "notifications"
 GSCONNECT_CLIPBOARD = "org.gnome.Shell.Extensions.GSConnect.Clipboard"
 GSCONNECT_CLIPBOARD_PATH = "/org/gnome/Shell/Extensions/GSConnect/Clipboard"
 
@@ -237,6 +241,42 @@ class PhoneNotifications:
         self._lock = threading.Lock()
         self._ids = {}  # phone notification key -> desktop notification id
 
+    @staticmethod
+    def save_image(encoded):
+        """Decode a base64 image from the phone into the cache; returns its path or None.
+
+        Only genuine PNG/JPEG data is accepted, and the file name comes from a hash of the
+        content, so nothing the phone sends can choose a path or write anything else.
+        """
+        if not isinstance(encoded, str) or not encoded:
+            return None
+        try:
+            data = base64.b64decode(encoded, validate=True)
+        except ValueError:
+            return None
+        if not data or len(data) > MAX_IMAGE:
+            return None
+        if data.startswith(b"\x89PNG\r\n\x1a\n"):
+            ext = "png"
+        elif data.startswith(b"\xff\xd8\xff"):
+            ext = "jpg"
+        else:
+            return None
+        CACHE.mkdir(parents=True, exist_ok=True)
+        os.chmod(CACHE, 0o700)
+        path = CACHE / f"{hashlib.sha256(data).hexdigest()[:32]}.{ext}"
+        if not path.exists():
+            path.write_bytes(data)
+            os.chmod(path, 0o600)
+            PhoneNotifications._prune()
+        return str(path)
+
+    @staticmethod
+    def _prune(keep=300):
+        files = sorted(CACHE.iterdir(), key=lambda f: f.stat().st_mtime)
+        for old in files[:-keep]:
+            old.unlink(missing_ok=True)
+
     def _bus(self):
         import gi
         gi.require_version("Gio", "2.0")
@@ -250,14 +290,15 @@ class PhoneNotifications:
             "org.freedesktop.Notifications", method, GLib.Variant(fmt, args),
             GLib.VariantType(reply) if reply else None, Gio.DBusCallFlags.NONE, 3000, None)
 
-    def show(self, key, app, title, text):
+    def show(self, key, app, title, text, app_icon=None, image=None):
         from gi.repository import GLib
         with self._lock:
             replaces = self._ids.get(key, 0)
+        hints = {"image-path": GLib.Variant("s", image)} if image else {}
         reply = self._call(
             "Notify",
-            (app[:80], replaces, "phone-symbolic", GLib.markup_escape_text(title[:MAX_FIELD]),
-             GLib.markup_escape_text(text[:MAX_FIELD]), [], {}, -1),
+            (app[:80], replaces, app_icon or "phone-symbolic", GLib.markup_escape_text(title[:MAX_FIELD]),
+             GLib.markup_escape_text(text[:MAX_FIELD]), [], hints, -1),
             "(susssasa{sv}i)", "(u)")
         with self._lock:
             self._ids[key] = reply.unpack()[0]
@@ -341,7 +382,7 @@ class Handler(BaseHTTPRequestHandler):
     def _phone_notification(self, dismiss):
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if not 0 < length <= MAX_BODY:
+            if not 0 < length <= MAX_NOTIFICATION_BODY:
                 raise ValueError("bad length")
             msg = json.loads(self.rfile.read(length))
             key = str(msg["key"])[:300]
@@ -349,7 +390,9 @@ class Handler(BaseHTTPRequestHandler):
                 PHONE_NOTIFICATIONS.dismiss(key)
             else:
                 PHONE_NOTIFICATIONS.show(
-                    key, str(msg.get("app", "Phone")), str(msg.get("title", "")), str(msg.get("text", "")))
+                    key, str(msg.get("app", "Phone")), str(msg.get("title", "")), str(msg.get("text", "")),
+                    app_icon=PhoneNotifications.save_image(msg.get("appIcon")),
+                    image=PhoneNotifications.save_image(msg.get("image")))
         except (ValueError, KeyError, TypeError):
             return self._json(400, {"ok": False, "error": "bad request"})
         except Exception as e:  # desktop notification service unavailable
