@@ -34,6 +34,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.core.app.NotificationManagerCompat
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
@@ -42,6 +43,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -56,12 +58,19 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
+    private val resumeTick = mutableIntStateOf(0)
+
+    override fun onResume() {
+        super.onResume()
+        resumeTick.intValue++ // grants happen in system screens; re-check when we come back
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val store = Store(this)
         if (store.listenEnabled && store.load() != null) ListenerService.start(this)
-        setContent { EcozTheme { EcozScreen(store) } }
+        setContent { EcozTheme { EcozScreen(store, resumeTick.intValue) } }
     }
 }
 
@@ -80,7 +89,7 @@ private fun EcozTheme(content: @Composable () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun EcozScreen(store: Store) {
+private fun EcozScreen(store: Store, resumeTick: Int) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var pairing by remember { mutableStateOf(store.load()) }
@@ -100,6 +109,10 @@ private fun EcozScreen(store: Store) {
         if (on) ListenerService.start(context) else ListenerService.stop(context)
     }
     var clipboardSync by remember { mutableStateOf(store.clipboardSync) }
+    var mirror by remember { mutableStateOf(store.mirrorNotifications) }
+    val notificationAccess = remember(resumeTick) {
+        NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
+    }
     // Notifications are the only way the phone can show what the laptop sends.
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         setReceiving(true)
@@ -204,6 +217,47 @@ private fun EcozScreen(store: Store) {
                             "To send what you copied here to the laptop, tap “Send clipboard” in the ecoz " +
                                 "notification. Android doesn't let apps watch the clipboard in the background.",
                             style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Mirror notifications", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    when {
+                                        !mirror -> "Off"
+                                        !notificationAccess -> "Needs notification access"
+                                        else -> "Phone notifications appear on the laptop"
+                                    },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                            }
+                            Switch(checked = mirror, onCheckedChange = {
+                                mirror = it
+                                store.mirrorNotifications = it
+                            })
+                        }
+                        if (mirror && !notificationAccess) {
+                            Text(
+                                "Android needs you to allow ecoz to read notifications. Ongoing and " +
+                                    "silent ones, and anything marked private, are never sent.",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            OutlinedButton(onClick = {
+                                context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                            }) { Text("Allow notification access") }
+                        }
+                    }
+                }
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Find my phone", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "On the laptop run  ecoz ring  and this phone sounds an alarm at full volume, " +
+                                "even on silent, until you tap Stop (it stops by itself after a minute).",
+                            style = MaterialTheme.typography.bodyMedium,
                         )
                     }
                 }

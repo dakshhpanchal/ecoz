@@ -38,6 +38,7 @@ class ListenerService : Service() {
     private val handle = StreamHandle()
     private val seen = LinkedHashSet<String>() // event ids already shown (the laptop may re-send)
     private var job: Job? = null
+    private var ringStopJob: Job? = null
     private lateinit var notifications: NotificationManager
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -45,6 +46,7 @@ class ListenerService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         notifications = getSystemService(NotificationManager::class.java)
         createChannels()
+        if (intent?.action == ACTION_STOP_RING) stopRinging()
         ServiceCompat.startForeground(
             this, FOREGROUND_ID, foregroundNotification("Connecting…"),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
@@ -54,6 +56,7 @@ class ListenerService : Service() {
     }
 
     override fun onDestroy() {
+        RingController.stop(this)
         handle.close() // unblocks the read so the loop can exit
         scope.cancel()
         ListenerState.status.value = "Off"
@@ -106,10 +109,41 @@ class ListenerService : Service() {
                 "text" -> copyText(id, value)
                 "clip" -> if (Store(applicationContext).clipboardSync) ClipboardSync.apply(applicationContext, value)
                 "pull" -> showPullRequest(id)
+                "ring" -> if (value == "start") startRinging() else stopRinging()
             }
         }
         // Ack even duplicates, otherwise the laptop keeps re-sending them.
         if (id.isNotEmpty()) EcozClient.ack(pairing, id)
+    }
+
+    private fun startRinging() {
+        if (!RingController.start(this)) return
+        ringStopJob?.cancel()
+        ringStopJob = scope.launch {
+            delay(RING_MAX_MS) // never ring forever if nobody is around to stop it
+            stopRinging()
+        }
+        val stop = PendingIntent.getService(
+            this, 2, Intent(this, ListenerService::class.java).setAction(ACTION_STOP_RING),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        notifications.notify(
+            RING_ID,
+            NotificationCompat.Builder(this, CHANNEL_ALARM)
+                .setSmallIcon(R.drawable.ic_stat_ecoz)
+                .setContentTitle("Your laptop is ringing this phone")
+                .setContentText("Tap Stop to silence it")
+                .addAction(0, "Stop", stop)
+                .setOngoing(true)
+                .setCategory(Notification.CATEGORY_ALARM)
+                .build(),
+        )
+    }
+
+    private fun stopRinging() {
+        RingController.stop(this)
+        ringStopJob?.cancel()
+        notifications.cancel(RING_ID)
     }
 
     private fun showLink(id: String, url: String) {
@@ -192,11 +226,18 @@ class ListenerService : Service() {
         notifications.createNotificationChannel(
             NotificationChannel(CHANNEL_INCOMING, "From laptop", NotificationManager.IMPORTANCE_HIGH)
         )
+        notifications.createNotificationChannel(
+            NotificationChannel(CHANNEL_ALARM, "Find my phone", NotificationManager.IMPORTANCE_HIGH)
+        )
     }
 
     companion object {
         private const val CHANNEL_SERVICE = "service"
         private const val CHANNEL_INCOMING = "incoming"
+        private const val CHANNEL_ALARM = "alarm"
+        private const val ACTION_STOP_RING = "app.ecoz.STOP_RING"
+        private const val RING_ID = 2
+        private const val RING_MAX_MS = 60_000L
         private const val FOREGROUND_ID = 1
         private const val INITIAL_BACKOFF_MS = 2_000L
         private const val MAX_BACKOFF_MS = 30_000L

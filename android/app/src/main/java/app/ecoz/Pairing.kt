@@ -51,6 +51,11 @@ class Store(context: Context) {
         get() = prefs.getBoolean("listen", false)
         set(value) = prefs.edit().putBoolean("listen", value).apply()
 
+    /** Show phone notifications on the laptop. */
+    var mirrorNotifications: Boolean
+        get() = prefs.getBoolean("mirror_notifications", false)
+        set(value) = prefs.edit().putBoolean("mirror_notifications", value).apply()
+
     /** Keep the two clipboards in step automatically. */
     var clipboardSync: Boolean
         get() = prefs.getBoolean("clipboard_sync", true)

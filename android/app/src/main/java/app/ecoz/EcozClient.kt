@@ -42,6 +42,8 @@ object EcozClient {
     fun send(p: Pairing, type: String, value: String): Outcome =
         request(p, "POST", "/v1/handoff", JSONObject().put("type", type).put("value", value).toString())
 
+    fun post(p: Pairing, path: String, body: JSONObject): Outcome = request(p, "POST", path, body.toString())
+
     fun ack(p: Pairing, eventId: String): Outcome =
         request(p, "POST", "/v1/ack", JSONObject().put("id", eventId).toString())
 

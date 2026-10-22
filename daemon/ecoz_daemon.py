@@ -9,6 +9,7 @@ Receives links/text from the phone over HTTPS on the LAN and opens them here.
                                     (no argument: sends the current clipboard)
   ecoz_daemon.py pull               ask the phone to send its clipboard here
   ecoz_daemon.py sync [on|off]      show or switch automatic clipboard sync
+  ecoz_daemon.py ring [stop]        make the phone ring (find my phone)
 
 Security model: TLS with a self-signed certificate (the phone pins its SHA-256
 fingerprint) plus a random bearer token. Only http/https URLs are ever opened.
@@ -225,12 +226,62 @@ class Hub:
 HUB = Hub()
 
 
+# --- phone notifications mirrored onto the laptop -------------------------------------
+MAX_FIELD = 500
+
+
+class PhoneNotifications:
+    """Shows phone notifications through the desktop's notification service."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._ids = {}  # phone notification key -> desktop notification id
+
+    def _bus(self):
+        import gi
+        gi.require_version("Gio", "2.0")
+        from gi.repository import Gio
+        return Gio.bus_get_sync(Gio.BusType.SESSION)
+
+    def _call(self, method, args, fmt, reply):
+        from gi.repository import Gio, GLib
+        return self._bus().call_sync(
+            "org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+            "org.freedesktop.Notifications", method, GLib.Variant(fmt, args),
+            GLib.VariantType(reply) if reply else None, Gio.DBusCallFlags.NONE, 3000, None)
+
+    def show(self, key, app, title, text):
+        from gi.repository import GLib
+        with self._lock:
+            replaces = self._ids.get(key, 0)
+        reply = self._call(
+            "Notify",
+            (app[:80], replaces, "phone-symbolic", GLib.markup_escape_text(title[:MAX_FIELD]),
+             GLib.markup_escape_text(text[:MAX_FIELD]), [], {}, -1),
+            "(susssasa{sv}i)", "(u)")
+        with self._lock:
+            self._ids[key] = reply.unpack()[0]
+            if len(self._ids) > 200:  # bounded: forget the oldest entries
+                self._ids.pop(next(iter(self._ids)))
+
+    def dismiss(self, key):
+        with self._lock:
+            desktop_id = self._ids.pop(key, None)
+        if desktop_id:
+            self._call("CloseNotification", (desktop_id,), "(u)", None)
+
+
+PHONE_NOTIFICATIONS = PhoneNotifications()
+
+
 def check_item(kind, value, allowed=("url", "text")):
     """Return an error string, or None if the item is safe to act on."""
     if kind not in allowed:
         return "unknown type"
     if kind == "clip" and not value:
         return "empty clipboard"
+    if kind == "ring" and value not in ("start", "stop"):
+        return "bad ring command"
     if kind == "url":
         parts = urlparse(value)
         if parts.scheme not in ("http", "https") or not parts.netloc:
@@ -287,11 +338,32 @@ class Handler(BaseHTTPRequestHandler):
             return self._stream_events()
         self._json(200, {"ok": True, "name": socket.gethostname()})
 
+    def _phone_notification(self, dismiss):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= MAX_BODY:
+                raise ValueError("bad length")
+            msg = json.loads(self.rfile.read(length))
+            key = str(msg["key"])[:300]
+            if dismiss:
+                PHONE_NOTIFICATIONS.dismiss(key)
+            else:
+                PHONE_NOTIFICATIONS.show(
+                    key, str(msg.get("app", "Phone")), str(msg.get("title", "")), str(msg.get("text", "")))
+        except (ValueError, KeyError, TypeError):
+            return self._json(400, {"ok": False, "error": "bad request"})
+        except Exception as e:  # desktop notification service unavailable
+            print(f"notification failed: {e}", file=sys.stderr, flush=True)
+            return self._json(502, {"ok": False, "error": "desktop notifications unavailable"})
+        self._json(200, {"ok": True})
+
     def do_POST(self):
-        if self.path not in ("/v1/handoff", "/v1/push", "/v1/ack"):
+        if self.path not in ("/v1/handoff", "/v1/push", "/v1/ack", "/v1/notification", "/v1/notification/dismiss"):
             return self._json(404, {"ok": False})
         if not self._authed():
             return self._json(401, {"ok": False, "error": "unauthorized"})
+        if self.path.startswith("/v1/notification"):
+            return self._phone_notification(dismiss=self.path.endswith("/dismiss"))
         try:
             length = int(self.headers.get("Content-Length", "0"))
             if not 0 < length <= MAX_BODY:
@@ -305,13 +377,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"ok": False, "error": "bad request"})
 
         # "pull" (ask the phone for its clipboard) only makes sense laptop -> phone
-        allowed = ("url", "text", "pull", "clip") if self.path == "/v1/push" else ("url", "text", "clip")
+        allowed = ("url", "text", "pull", "clip", "ring") if self.path == "/v1/push" else ("url", "text", "clip")
         error = check_item(kind, value, allowed)
         if error:
             return self._json(400, {"ok": False, "error": error})
 
         if self.path == "/v1/push":  # laptop -> phone
-            return self._json(200, {"ok": True, "status": HUB.publish({"type": kind, "value": value})})
+            # a ring request is pointless minutes later, so it is never queued for a reconnect
+            status = HUB.publish({"type": kind, "value": value}, queue_offline=(kind != "ring"))
+            return self._json(200, {"ok": True, "status": status})
 
         if kind == "url":  # phone -> laptop
             # Own transient unit, so the browser isn't part of this service's cgroup.
@@ -436,6 +510,13 @@ def sync_setting(args):
     report(f"Clipboard sync is {'on' if clip_sync_enabled() else 'off'}.")
 
 
+def ring_phone(args):
+    """CLI: make the phone ring so you can find it; `ring stop` silences it."""
+    if args and args[0] not in ("stop", "start"):
+        sys.exit("usage: ecoz_daemon.py ring [stop]")
+    push("ring", "stop" if args and args[0] == "stop" else "start")
+
+
 def pull_from_phone():
     """CLI: ask the phone to send its clipboard; it needs one tap on the phone."""
     push("pull", "")
@@ -454,6 +535,9 @@ def push(kind, value):
         report(f"service not reachable ({e}); is ecoz.service running?", failed=True)
     if resp.status != 200:
         report(f"refused: {body.get('error', resp.status)}", failed=True)
+    if kind == "ring":
+        return report(("Phone is ringing." if value == "start" else "Told the phone to stop.")
+                      if body["status"] == "delivered" else "Phone isn't connected, so it can't ring.")
     if kind == "pull":
         return report("Asked the phone. Tap “Send clipboard” on it, then paste here."
                       if body["status"] == "delivered"
@@ -469,6 +553,8 @@ def main():
         send_to_phone(sys.argv[2:])
     elif cmd == "pull":
         pull_from_phone()
+    elif cmd == "ring":
+        ring_phone(sys.argv[2:])
     elif cmd == "sync":
         sync_setting(sys.argv[2:])
     elif cmd == "pair":

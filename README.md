@@ -21,6 +21,7 @@ For everyday use, link the wrapper onto your PATH:
     ecoz send https://example.com    # a link or text to the phone
     ecoz send                        # whatever is on the clipboard
     ecoz sync off                    # pause automatic clipboard sync (on to resume)
+    ecoz ring                        # find my phone: alarm at full volume (ecoz ring stop)
 
 Clipboard sync needs the GSConnect GNOME extension, whose clipboard bridge ecoz uses to read
 and write the Wayland clipboard. Anything you copy on the laptop lands on the phone's
@@ -33,6 +34,11 @@ clipboard automatically (password-manager copies and anything over 64 KB are ski
 
 Open the app, paste the pairing code, then use Share → "Send to laptop". Turn on
 "Receive from laptop" to get items and clipboard changes pushed from the laptop.
+
+Phone notifications are mirrored to the laptop when "Mirror notifications" is on and
+notification access is granted (Settings, or `adb shell cmd notification allow_listener
+app.ecoz/app.ecoz.NotificationMirrorService`). Ongoing, silent and private notifications are
+never sent; dismissing one on the phone closes it on the laptop.
 
 Phone → laptop clipboard is one tap: "Send clipboard" in the ecoz notification. Android
 stops background apps from reading the clipboard, so it can't be automatic.
