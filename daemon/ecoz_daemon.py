@@ -82,6 +82,29 @@ def pairing_code(token):
     return f"ecoz://{lan_ip()}:{PORT}/{token}/{fingerprint()}?name={name}"
 
 
+def open_in_browser(url, activation_token=None):
+    """Open an http(s) link in the default browser. Never anything but http(s).
+
+    On Wayland a window may only come to the front if it is given an activation token from
+    the click that caused it. A notification button click provides one; without it the page
+    opens in a tab behind everything else and looks like nothing happened.
+    """
+    if urlparse(url).scheme not in ("http", "https"):
+        return
+    token = activation_token if activation_token and re.fullmatch(r"[\w.:@/+=-]{1,300}", activation_token) else None
+    env = [f"--setenv={name}={token}" for name in ("XDG_ACTIVATION_TOKEN", "DESKTOP_STARTUP_ID")] if token else []
+    # Own transient unit, so the browser isn't part of this service's cgroup. xdg-open exits in
+    # milliseconds while the browser launcher is still handing the link to the running browser;
+    # with the default KillMode systemd would kill that handoff when xdg-open's unit ends, and
+    # the page would never open. KillMode=process stops only xdg-open itself.
+    launched = subprocess.run(
+        ["systemd-run", "--user", "--collect", "--quiet", "--property=KillMode=process", *env, "xdg-open", url],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+    if not launched:
+        subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True, env={**os.environ, **({"XDG_ACTIVATION_TOKEN": token} if token else {})})
+
+
 def notify(title, body=""):
     subprocess.run(["notify-send", "-a", "ecoz", title, body], check=False)
 
@@ -236,6 +259,35 @@ HUB = Hub()
 MAX_FIELD = 500
 
 
+def gmail_url(title, _text, subtext):
+    """Gmail on the web, on the account the notification belongs to.
+
+    Gmail's notification title is the sender (or "3 new messages") and its subtext is the
+    account address. A search for recent mail from that sender lands on the message; when the
+    title isn't a sender, the unread view does.
+    """
+    account = subtext if re.fullmatch(r"[^@\s]+@[^@\s]+", subtext or "") else None
+    sender = (title or "").replace('"', "").strip()
+    if sender.lower() == "me":  # Gmail names you "me" on mail you sent yourself; from:me is its own-account search
+        query = "from:me newer_than:3d"
+    elif sender and not re.match(r"\d+ new", sender):
+        query = f'from:"{sender}" newer_than:3d'
+    else:
+        query = "is:unread"
+    base = "https://mail.google.com/mail/" + (f"?authuser={quote(account)}" if account else "u/0/")
+    return f"{base}#search/{quote(query, safe='')}"
+
+
+# Apps whose "Reply" button only opens the phone app (no reply box): open the web app instead.
+WEB_REPLY = {"com.google.android.gm": gmail_url}
+
+
+def title_case(label):
+    """'MARK AS READ' / 'mark as read' -> 'Mark As Read'. Words with digits are left alone."""
+    return " ".join(w if any(c.isdigit() for c in w) else w[:1].upper() + w[1:].lower()
+                    for w in label.split())
+
+
 class PhoneNotifications:
     """Shows phone notifications through the desktop's notification service."""
 
@@ -243,6 +295,7 @@ class PhoneNotifications:
         self._lock = threading.Lock()
         self._ids = {}  # phone notification key -> desktop notification id
         self._actions = {}  # desktop id -> (phone key, title, routes, app, text, image path)
+        self._tokens = {}  # desktop id -> Wayland activation token for the click in progress
 
     @staticmethod
     def save_image(encoded):
@@ -293,7 +346,7 @@ class PhoneNotifications:
             "org.freedesktop.Notifications", method, GLib.Variant(fmt, args),
             GLib.VariantType(reply) if reply else None, Gio.DBusCallFlags.NONE, 3000, None)
 
-    def show(self, key, app, title, text, app_icon=None, image=None, actions=()):
+    def show(self, key, app, title, text, app_icon=None, image=None, actions=(), package="", subtext=""):
         from gi.repository import GLib
         with self._lock:
             replaces = self._ids.get(key, 0)
@@ -304,8 +357,11 @@ class PhoneNotifications:
         buttons, routes = [], {}
         for a in usable:
             button_id = f"a{int(a['index'])}"
-            buttons += [button_id, str(a["title"])[:30]]
-            routes[button_id] = (int(a["index"]), bool(a.get("reply")))
+            buttons += [button_id, title_case(str(a["title"]))[:30]]
+            web_url = None
+            if not a.get("reply") and str(a["title"]).strip().lower() == "reply" and package in WEB_REPLY:
+                web_url = WEB_REPLY[package](title, text, subtext)
+            routes[button_id] = (int(a["index"]), bool(a.get("reply")), web_url)
         reply = self._call(
             "Notify",
             (app[:80], replaces, app_icon or "phone-symbolic", GLib.markup_escape_text(title[:MAX_FIELD]),
@@ -320,16 +376,31 @@ class PhoneNotifications:
             if len(self._ids) > 200:  # bounded: forget the oldest entries
                 self._ids.pop(next(iter(self._ids)))
 
+    def remember_token(self, desktop_id, token):
+        with self._lock:
+            self._tokens[desktop_id] = token
+            if len(self._tokens) > 50:
+                self._tokens.pop(next(iter(self._tokens)))
+
     def action_invoked(self, desktop_id, button_id):
         """A button on one of our notifications was pressed: reply window or straight to the phone."""
         with self._lock:
             entry = self._actions.get(desktop_id)
+            token = self._tokens.pop(desktop_id, None)
         route = entry[2].get(button_id) if entry else None
+        if entry is None and re.fullmatch(r"a\d", button_id):
+            # One of our buttons on a notification shown before the service last restarted:
+            # the link to the phone's notification is gone, so say so instead of doing nothing.
+            print(f"action pressed on an unknown notification id={desktop_id}", file=sys.stderr, flush=True)
+            notify("ecoz", "That notification is out of date. Reply to the newest one instead.")
         if not route:
             return
+        print(f"action pressed: button={button_id} reply={route[1]} web={bool(route[2])}", file=sys.stderr, flush=True)
         key, title, _, app, text, picture = entry
-        index, is_reply = route
-        if is_reply:  # needs text: ask for it
+        index, is_reply, web_url = route
+        if web_url:  # the phone's Reply only opens the phone app; open the web app here instead
+            open_in_browser(web_url, token)
+        elif is_reply:  # needs text: ask for it
             subprocess.Popen(
                 [sys.executable, "-I", str(Path(__file__).with_name("ecoz_reply.py")),
                  key, str(index), title, app, text, picture],
@@ -367,9 +438,14 @@ def watch_notification_actions():
             desktop_id, button_id = params.unpack()
             PHONE_NOTIFICATIONS.action_invoked(desktop_id, button_id)
 
-        bus.signal_subscribe(
-            "org.freedesktop.Notifications", "org.freedesktop.Notifications", "ActionInvoked",
-            "/org/freedesktop/Notifications", None, Gio.DBusSignalFlags.NONE, on_signal)
+        def on_token(_bus, _sender, _path, _iface, _signal, params):
+            desktop_id, token = params.unpack()  # arrives just before ActionInvoked for the same click
+            PHONE_NOTIFICATIONS.remember_token(desktop_id, token)
+
+        for signal, handler in (("ActivationToken", on_token), ("ActionInvoked", on_signal)):
+            bus.signal_subscribe(
+                "org.freedesktop.Notifications", "org.freedesktop.Notifications", signal,
+                "/org/freedesktop/Notifications", None, Gio.DBusSignalFlags.NONE, handler)
         GLib.MainLoop(context).run()
 
     threading.Thread(target=run, daemon=True, name="notification-actions").start()
@@ -463,7 +539,8 @@ class Handler(BaseHTTPRequestHandler):
                     key, str(msg.get("app", "Phone")), str(msg.get("title", "")), str(msg.get("text", "")),
                     app_icon=PhoneNotifications.save_image(msg.get("appIcon")),
                     image=PhoneNotifications.save_image(msg.get("image")),
-                    actions=msg.get("actions") if isinstance(msg.get("actions"), list) else ())
+                    actions=msg.get("actions") if isinstance(msg.get("actions"), list) else (),
+                    package=str(msg.get("package", ""))[:200], subtext=str(msg.get("subtext", ""))[:200])
         except (ValueError, KeyError, TypeError):
             return self._json(400, {"ok": False, "error": "bad request"})
         except Exception as e:  # desktop notification service unavailable
@@ -502,13 +579,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {"ok": True, "status": status})
 
         if kind == "url":  # phone -> laptop
-            # Own transient unit, so the browser isn't part of this service's cgroup.
-            launched = subprocess.run(
-                ["systemd-run", "--user", "--collect", "--quiet", "xdg-open", value],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
-            if not launched:
-                subprocess.Popen(["xdg-open", value], stdout=subprocess.DEVNULL,
-                                 stderr=subprocess.DEVNULL, start_new_session=True)
+            open_in_browser(value)
             notify("Opened from phone", urlparse(value).netloc)
         elif kind == "clip":  # automatic sync from the phone: silent
             if clip_sync_enabled():

@@ -73,7 +73,9 @@ class NotificationMirrorService : NotificationListenerService() {
 
         scope.launch {
             val body = JSONObject().put("key", sbn.key).put("app", appLabel(sbn)).put("title", title).put("text", text)
-            body.put("actions", actionsOf(sbn))
+            body.put("package", sbn.packageName)
+                .put("subtext", extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString().orEmpty())
+                .put("actions", actionsOf(sbn))
             appIcon(sbn)?.let { body.put("appIcon", it) }
             picture(sbn)?.let { body.put("image", it) }
             Sender.run(applicationContext, store, pairing) { target ->
