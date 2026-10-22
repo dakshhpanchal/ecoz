@@ -1,0 +1,3 @@
+#!/bin/sh
+# ecoz command: send | pair | serve. Resolves its own location so a symlink works.
+exec python3 -I "$(dirname "$(readlink -f "$0")")/../daemon/ecoz_daemon.py" "$@"

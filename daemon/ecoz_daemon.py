@@ -5,7 +5,8 @@ Receives links/text from the phone over HTTPS on the LAN and opens them here.
 
   ecoz_daemon.py pair            print the pairing code (copy it to the phone)
   ecoz_daemon.py serve           run the service (default)
-  ecoz_daemon.py send <link|text>  push a link or text to the phone
+  ecoz_daemon.py send [link|text]   push a link or text to the phone
+                                    (no argument: sends the current clipboard)
 
 Security model: TLS with a self-signed certificate (the phone pins its SHA-256
 fingerprint) plus a random bearer token. Only http/https URLs are ever opened.
@@ -305,11 +306,37 @@ def serve():
     httpd.serve_forever()
 
 
+def get_clipboard():
+    """Current clipboard text via GSConnect's shell bridge, or None."""
+    try:
+        import gi
+        gi.require_version("Gio", "2.0")
+        from gi.repository import Gio
+
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+        proxy = Gio.DBusProxy.new_sync(
+            bus, 0, None, GSCONNECT_CLIPBOARD, GSCONNECT_CLIPBOARD_PATH,
+            GSCONNECT_CLIPBOARD, None)
+        return proxy.call_sync("GetText", None, 0, 3000, None).unpack()[0]
+    except Exception:
+        return None
+
+
+def report(message, failed=False):
+    """Print for terminal use; raise a desktop notification when run from a shortcut."""
+    if sys.stdout.isatty():
+        print(message, file=sys.stderr if failed else sys.stdout)
+    else:
+        notify("ecoz: couldn't send" if failed else "ecoz", message)
+    if failed:
+        sys.exit(1)
+
+
 def send_to_phone(words):
     """CLI: ask the running service to push a link/text to the phone."""
-    value = " ".join(words).strip()
+    value = " ".join(words).strip() or (get_clipboard() or "").strip()
     if not value:
-        sys.exit("usage: ecoz_daemon.py send <link or text>")
+        report("Nothing to send: give a link or text, or copy something first.", failed=True)
     kind = "url" if re.fullmatch(r"https?://\S+", value) else "text"
     ctx = ssl.create_default_context(cafile=str(CERT))  # trust only our own certificate
     ctx.check_hostname = False
@@ -320,11 +347,12 @@ def send_to_phone(words):
         resp = conn.getresponse()
         body = json.loads(resp.read() or b"{}")
     except OSError as e:
-        sys.exit(f"service not reachable ({e}); is ecoz.service running?")
+        report(f"service not reachable ({e}); is ecoz.service running?", failed=True)
     if resp.status != 200:
-        sys.exit(f"refused: {body.get('error', resp.status)}")
-    print("sent to phone" if body["status"] == "delivered"
-          else "phone not connected; queued for 10 minutes")
+        report(f"refused: {body.get('error', resp.status)}", failed=True)
+    preview = value if len(value) <= 60 else value[:57] + "..."
+    report(f"Sent to phone: {preview}" if body["status"] == "delivered"
+           else f"Phone not connected; queued for 10 minutes: {preview}")
 
 
 def main():

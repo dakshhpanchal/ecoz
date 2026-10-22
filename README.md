@@ -15,6 +15,15 @@ Send links and text between a Linux laptop and an Android phone over the local n
     python3 -I daemon/ecoz_daemon.py pair     # pairing code; copy it to the phone
     python3 -I daemon/ecoz_daemon.py send https://example.com
 
+For everyday use, link the wrapper onto your PATH:
+
+    ln -s ~/probes/ecoz/bin/ecoz ~/.local/bin/ecoz
+    ecoz send https://example.com    # a link or text
+    ecoz send                        # whatever is on the clipboard (needs GSConnect's clipboard bridge)
+
+Bind `ecoz send` to a key in Settings > Keyboard > Custom Shortcuts (I use Super+Shift+P):
+copy a link or text, press the key, and it appears on the phone.
+
 The unit expects this repo at `~/probes/ecoz`; edit `ExecStart` if it lives elsewhere.
 
 ## Phone
