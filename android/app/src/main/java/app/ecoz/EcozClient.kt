@@ -1,4 +1,4 @@
-package app.handoff
+package app.ecoz
 
 import org.json.JSONObject
 import java.io.IOException
@@ -18,7 +18,7 @@ import javax.net.ssl.X509TrustManager
 /** [unreachable] means the laptop wasn't contacted at all (wrong address / off network), so rediscovery may help. */
 data class Outcome(val ok: Boolean, val message: String, val unreachable: Boolean = false)
 
-/** Lets another thread cut a blocking [HandoffClient.listen] short. */
+/** Lets another thread cut a blocking [EcozClient.listen] short. */
 class StreamHandle {
     @Volatile private var connection: HttpsURLConnection? = null
     internal fun attach(c: HttpsURLConnection) { connection = c }
@@ -30,7 +30,7 @@ class StreamHandle {
  * instead of CA validation we pin its SHA-256 fingerprint from the pairing code. That
  * pin is the laptop's identity, which is why hostname verification is skipped.
  */
-object HandoffClient {
+object EcozClient {
     private const val CONNECT_TIMEOUT_MS = 4_000
     private const val READ_TIMEOUT_MS = 6_000
 

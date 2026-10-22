@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Handoff laptop service.
+"""ecoz laptop service.
 
 Receives links/text from the phone over HTTPS on the LAN and opens them here.
 
-  handoff_daemon.py pair            print the pairing code (copy it to the phone)
-  handoff_daemon.py serve           run the service (default)
-  handoff_daemon.py send <link|text>  push a link or text to the phone
+  ecoz_daemon.py pair            print the pairing code (copy it to the phone)
+  ecoz_daemon.py serve           run the service (default)
+  ecoz_daemon.py send <link|text>  push a link or text to the phone
 
 Security model: TLS with a self-signed certificate (the phone pins its SHA-256
 fingerprint) plus a random bearer token. Only http/https URLs are ever opened.
@@ -28,8 +28,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote, urlparse
 
-PORT = int(os.environ.get("HANDOFF_PORT", "8765"))
-CONF = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "handoff"
+PORT = int(os.environ.get("ECOZ_PORT", "8765"))
+CONF = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "ecoz"
 CERT, KEY, TOKEN_FILE = CONF / "cert.pem", CONF / "key.pem", CONF / "token"
 MAX_BODY = 64 * 1024
 GSCONNECT_CLIPBOARD = "org.gnome.Shell.Extensions.GSConnect.Clipboard"
@@ -69,11 +69,11 @@ def fingerprint():
 
 def pairing_code(token):
     name = quote(socket.gethostname())
-    return f"handoff://{lan_ip()}:{PORT}/{token}/{fingerprint()}?name={name}"
+    return f"ecoz://{lan_ip()}:{PORT}/{token}/{fingerprint()}?name={name}"
 
 
 def notify(title, body=""):
-    subprocess.run(["notify-send", "-a", "Handoff", title, body], check=False)
+    subprocess.run(["notify-send", "-a", "ecoz", title, body], check=False)
 
 
 def set_clipboard(text):
@@ -163,7 +163,7 @@ def check_item(kind, value):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "Handoff/0.1"
+    server_version = "ecoz/0.1"
     token = ""
 
     def log_message(self, fmt, *args):  # keep journal quiet; never log bodies
@@ -251,7 +251,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def publish_mdns():
-    """Announce _handoff._tcp via Avahi so the phone can find us after an IP change.
+    """Announce _ecoz._tcp via Avahi so the phone can find us after an IP change.
 
     The TXT record carries only a fingerprint prefix; the phone still pins the full
     certificate, so a spoofed announcement can't capture the token.
@@ -276,7 +276,7 @@ def publish_mdns():
         txt = [list(f"fp={fingerprint()[:16]}".encode())]
         call(group, "AddService", GLib.Variant(
             "(iiussssqaay)",
-            (-1, -1, 0, socket.gethostname(), "_handoff._tcp", "", "", PORT, txt)))
+            (-1, -1, 0, socket.gethostname(), "_ecoz._tcp", "", "", PORT, txt)))
         call(group, "Commit")
         return group  # must stay referenced: Avahi drops the record when we disconnect
     except Exception as e:  # discovery is a convenience; pairing by IP still works
@@ -300,7 +300,7 @@ def serve():
     ctx.load_cert_chain(CERT, KEY)
     httpd = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
-    print(f"handoff listening on :{PORT}"
+    print(f"ecoz listening on :{PORT}"
           f"{' (announced via mDNS)' if mdns else ''}", flush=True)
     httpd.serve_forever()
 
@@ -309,7 +309,7 @@ def send_to_phone(words):
     """CLI: ask the running service to push a link/text to the phone."""
     value = " ".join(words).strip()
     if not value:
-        sys.exit("usage: handoff_daemon.py send <link or text>")
+        sys.exit("usage: ecoz_daemon.py send <link or text>")
     kind = "url" if re.fullmatch(r"https?://\S+", value) else "text"
     ctx = ssl.create_default_context(cafile=str(CERT))  # trust only our own certificate
     ctx.check_hostname = False
@@ -320,7 +320,7 @@ def send_to_phone(words):
         resp = conn.getresponse()
         body = json.loads(resp.read() or b"{}")
     except OSError as e:
-        sys.exit(f"service not reachable ({e}); is handoff.service running?")
+        sys.exit(f"service not reachable ({e}); is ecoz.service running?")
     if resp.status != 200:
         sys.exit(f"refused: {body.get('error', resp.status)}")
     print("sent to phone" if body["status"] == "delivered"

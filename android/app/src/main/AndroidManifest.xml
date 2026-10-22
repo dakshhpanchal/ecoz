@@ -15,7 +15,7 @@
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Handoff">
+        android:theme="@style/Theme.Ecoz">
 
         <activity
             android:name=".MainActivity"
@@ -47,7 +47,7 @@
             android:excludeFromRecents="true"
             android:label="@string/share_label"
             android:noHistory="true"
-            android:theme="@style/Theme.Handoff.Share">
+            android:theme="@style/Theme.Ecoz.Share">
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />

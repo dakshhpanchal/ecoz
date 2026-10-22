@@ -1,4 +1,4 @@
-package app.handoff
+package app.ecoz
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -73,7 +73,7 @@ class ListenerService : Service() {
                 return
             }
             setStatus("Connecting to ${pairing.name}…")
-            val outcome = HandoffClient.listen(
+            val outcome = EcozClient.listen(
                 pairing, handle,
                 onConnected = {
                     backoffMs = INITIAL_BACKOFF_MS
@@ -109,7 +109,7 @@ class ListenerService : Service() {
             }
         }
         // Ack even duplicates, otherwise the laptop keeps re-sending them.
-        if (id.isNotEmpty()) HandoffClient.ack(pairing, id)
+        if (id.isNotEmpty()) EcozClient.ack(pairing, id)
     }
 
     private fun showLink(id: String, url: String) {
@@ -120,7 +120,7 @@ class ListenerService : Service() {
         )
         val host = runCatching { URI(url).host }.getOrNull() ?: url
         val notification = NotificationCompat.Builder(this, CHANNEL_INCOMING)
-            .setSmallIcon(R.drawable.ic_stat_handoff)
+            .setSmallIcon(R.drawable.ic_stat_ecoz)
             .setContentTitle("Link from laptop")
             .setContentText(host)
             .setStyle(NotificationCompat.BigTextStyle().bigText(url))
@@ -135,7 +135,7 @@ class ListenerService : Service() {
         // Writing the clipboard from the background is allowed; only reading is restricted.
         getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("From laptop", text))
         val notification = NotificationCompat.Builder(this, CHANNEL_INCOMING)
-            .setSmallIcon(R.drawable.ic_stat_handoff)
+            .setSmallIcon(R.drawable.ic_stat_ecoz)
             .setContentTitle("Copied from laptop")
             .setContentText(text.take(80))
             .setAutoCancel(true)
@@ -155,8 +155,8 @@ class ListenerService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         return NotificationCompat.Builder(this, CHANNEL_SERVICE)
-            .setSmallIcon(R.drawable.ic_stat_handoff)
-            .setContentTitle("Handoff")
+            .setSmallIcon(R.drawable.ic_stat_ecoz)
+            .setContentTitle("ecoz")
             .setContentText(text)
             .setContentIntent(open)
             .setOngoing(true)

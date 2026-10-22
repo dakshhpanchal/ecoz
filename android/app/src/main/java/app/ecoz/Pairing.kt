@@ -1,4 +1,4 @@
-package app.handoff
+package app.ecoz
 
 import android.content.Context
 import android.net.Uri
@@ -14,10 +14,10 @@ data class Pairing(
     companion object {
         private val SHA256_HEX = Regex("[0-9a-f]{64}")
 
-        /** Parses `handoff://host:port/<token>/<sha256-hex>?name=<laptop>`. */
+        /** Parses `ecoz://host:port/<token>/<sha256-hex>?name=<laptop>`. */
         fun parse(code: String): Pairing? {
             val uri = runCatching { Uri.parse(code.trim()) }.getOrNull() ?: return null
-            if (uri.scheme != "handoff") return null
+            if (uri.scheme != "ecoz") return null
             val host = uri.host ?: return null
             val port = uri.port.takeIf { it in 1..65535 } ?: return null
             val segments = uri.pathSegments
@@ -31,7 +31,7 @@ data class Pairing(
 
 /** Private-storage persistence for the single paired laptop. */
 class Store(context: Context) {
-    private val prefs = context.applicationContext.getSharedPreferences("handoff", Context.MODE_PRIVATE)
+    private val prefs = context.applicationContext.getSharedPreferences("ecoz", Context.MODE_PRIVATE)
 
     fun load(): Pairing? {
         val host = prefs.getString("host", null) ?: return null

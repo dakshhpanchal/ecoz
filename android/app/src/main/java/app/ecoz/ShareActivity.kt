@@ -1,4 +1,4 @@
-package app.handoff
+package app.ecoz
 
 import android.content.Intent
 import android.os.Bundle
@@ -29,8 +29,8 @@ class ShareActivity : ComponentActivity() {
                 val url = URL_PATTERN.find(shared)?.value
                 val (outcome, _) = Sender.run(applicationContext, store, pairing) { target ->
                     withContext(Dispatchers.IO) {
-                        if (url != null) HandoffClient.send(target, "url", url)
-                        else HandoffClient.send(target, "text", shared)
+                        if (url != null) EcozClient.send(target, "url", url)
+                        else EcozClient.send(target, "text", shared)
                     }
                 }
                 finishWith(outcome.message)

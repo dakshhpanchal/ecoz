@@ -1,4 +1,4 @@
-package app.handoff
+package app.ecoz
 
 import android.Manifest
 import android.content.ClipboardManager
@@ -61,12 +61,12 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         val store = Store(this)
         if (store.listenEnabled && store.load() != null) ListenerService.start(this)
-        setContent { HandoffTheme { HandoffScreen(store) } }
+        setContent { EcozTheme { EcozScreen(store) } }
     }
 }
 
 @Composable
-private fun HandoffTheme(content: @Composable () -> Unit) {
+private fun EcozTheme(content: @Composable () -> Unit) {
     val dark = isSystemInDarkTheme()
     val context = LocalContext.current
     val colors = when {
@@ -80,7 +80,7 @@ private fun HandoffTheme(content: @Composable () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun HandoffScreen(store: Store) {
+private fun EcozScreen(store: Store) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var pairing by remember { mutableStateOf(store.load()) }
@@ -107,7 +107,7 @@ private fun HandoffScreen(store: Store) {
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     Scaffold(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
-        topBar = { LargeTopAppBar(title = { Text("Handoff") }, scrollBehavior = scroll) },
+        topBar = { LargeTopAppBar(title = { Text("ecoz") }, scrollBehavior = scroll) },
     ) { padding ->
         Column(
             modifier = Modifier
@@ -125,7 +125,7 @@ private fun HandoffScreen(store: Store) {
                     onPair = {
                         val parsed = Pairing.parse(code)
                         if (parsed == null) {
-                            message = "That isn't a Handoff pairing code."
+                            message = "That isn't a ecoz pairing code."
                         } else {
                             store.save(parsed)
                             pairing = parsed
@@ -173,7 +173,7 @@ private fun HandoffScreen(store: Store) {
                         }
                         if (receiving) {
                             Text(
-                                "To keep this connected, set Battery to “Unrestricted” for Handoff.",
+                                "To keep this connected, set Battery to “Unrestricted” for ecoz.",
                                 style = MaterialTheme.typography.bodySmall,
                             )
                             OutlinedButton(onClick = {
@@ -191,7 +191,7 @@ private fun HandoffScreen(store: Store) {
                             busy = true
                             scope.launch {
                                 val (outcome, current) = Sender.run(context, store, paired) { target ->
-                                    withContext(Dispatchers.IO) { HandoffClient.ping(target) }
+                                    withContext(Dispatchers.IO) { EcozClient.ping(target) }
                                 }
                                 pairing = current
                                 message = if (outcome.ok) "Connected to ${current.name} at ${current.host}." else outcome.message
@@ -224,7 +224,7 @@ private fun PairCard(
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Pair with your laptop", style = MaterialTheme.typography.titleMedium)
             Text(
-                "On the laptop run  handoff_daemon.py pair  and copy the code. " +
+                "On the laptop run  ecoz_daemon.py pair  and copy the code. " +
                     "KDE Connect clipboard sync will bring it here. Then tap Paste.",
                 style = MaterialTheme.typography.bodyMedium,
             )

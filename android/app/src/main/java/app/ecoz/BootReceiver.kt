@@ -1,4 +1,4 @@
-package app.handoff
+package app.ecoz
 
 import android.content.BroadcastReceiver
 import android.content.Context

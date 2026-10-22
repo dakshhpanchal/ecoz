@@ -1,7 +1,7 @@
 <resources>
-    <style name="Theme.Handoff" parent="android:Theme.Material.NoActionBar" />
+    <style name="Theme.Ecoz" parent="android:Theme.Material.NoActionBar" />
 
-    <style name="Theme.Handoff.Share" parent="android:Theme.Material.NoActionBar">
+    <style name="Theme.Ecoz.Share" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:windowNoTitle">true</item>

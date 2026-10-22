@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Handoff"
+rootProject.name = "ecoz"
 include(":app")

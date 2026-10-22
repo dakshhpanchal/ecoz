@@ -1,4 +1,4 @@
-# Handoff
+# ecoz
 
 Send links and text between a Linux laptop and an Android phone over the local network.
 
@@ -10,12 +10,12 @@ Send links and text between a Linux laptop and an Android phone over the local n
 ## Laptop
 
     mkdir -p ~/.config/systemd/user
-    cp daemon/handoff.service ~/.config/systemd/user/
-    systemctl --user enable --now handoff
-    python3 -I daemon/handoff_daemon.py pair     # pairing code; copy it to the phone
-    python3 -I daemon/handoff_daemon.py send https://example.com
+    cp daemon/ecoz.service ~/.config/systemd/user/
+    systemctl --user enable --now ecoz
+    python3 -I daemon/ecoz_daemon.py pair     # pairing code; copy it to the phone
+    python3 -I daemon/ecoz_daemon.py send https://example.com
 
-The unit expects this repo at `~/probes/handoff`; edit `ExecStart` if it lives elsewhere.
+The unit expects this repo at `~/probes/ecoz`; edit `ExecStart` if it lives elsewhere.
 
 ## Phone
 

@@ -1,4 +1,4 @@
-package app.handoff
+package app.ecoz
 
 import android.content.Context
 import android.net.nsd.NsdManager
@@ -14,12 +14,12 @@ import kotlin.coroutines.resume
 data class Found(val host: String, val port: Int)
 
 /**
- * Finds the paired laptop on the LAN through mDNS (`_handoff._tcp`). The announcement
+ * Finds the paired laptop on the LAN through mDNS (`_ecoz._tcp`). The announcement
  * carries a fingerprint prefix so we only pick our own laptop; the TLS pin does the real
  * authentication when we connect.
  */
 object Discovery {
-    private const val SERVICE_TYPE = "_handoff._tcp."
+    private const val SERVICE_TYPE = "_ecoz._tcp."
     private const val DEFAULT_TIMEOUT_MS = 5_000L
 
     suspend fun find(context: Context, fingerprint: String, timeoutMs: Long = DEFAULT_TIMEOUT_MS): Found? {

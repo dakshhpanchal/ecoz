@@ -6,11 +6,11 @@ plugins {
 }
 
 android {
-    namespace = "app.handoff"
+    namespace = "app.ecoz"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "app.handoff"
+        applicationId = "app.ecoz"
         minSdk = 26
         targetSdk = 37
         versionCode = 1
