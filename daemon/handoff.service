@@ -1,0 +1,16 @@
+[Unit]
+Description=Handoff laptop service (receives links from the phone)
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 -I %h/probes/handoff/daemon/handoff_daemon.py serve
+Restart=on-failure
+# Browsers opened for a handoff must survive a service restart.
+KillMode=process
+RestartSec=3
+# The service only needs the network, notifications and the clipboard bridge.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,63 @@
+package app.handoff
+
+import android.content.Context
+import android.net.Uri
+
+/** Everything needed to talk to one laptop: address, secret token, pinned cert. */
+data class Pairing(
+    val host: String,
+    val port: Int,
+    val token: String,
+    val fingerprint: String,
+    val name: String,
+) {
+    companion object {
+        private val SHA256_HEX = Regex("[0-9a-f]{64}")
+
+        /** Parses `handoff://host:port/<token>/<sha256-hex>?name=<laptop>`. */
+        fun parse(code: String): Pairing? {
+            val uri = runCatching { Uri.parse(code.trim()) }.getOrNull() ?: return null
+            if (uri.scheme != "handoff") return null
+            val host = uri.host ?: return null
+            val port = uri.port.takeIf { it in 1..65535 } ?: return null
+            val segments = uri.pathSegments
+            if (segments.size != 2) return null
+            val fingerprint = segments[1].lowercase()
+            if (!SHA256_HEX.matches(fingerprint)) return null
+            return Pairing(host, port, segments[0], fingerprint, uri.getQueryParameter("name") ?: host)
+        }
+    }
+}
+
+/** Private-storage persistence for the single paired laptop. */
+class Store(context: Context) {
+    private val prefs = context.applicationContext.getSharedPreferences("handoff", Context.MODE_PRIVATE)
+
+    fun load(): Pairing? {
+        val host = prefs.getString("host", null) ?: return null
+        val token = prefs.getString("token", null) ?: return null
+        val fingerprint = prefs.getString("fingerprint", null) ?: return null
+        return Pairing(
+            host = host,
+            port = prefs.getInt("port", 0),
+            token = token,
+            fingerprint = fingerprint,
+            name = prefs.getString("name", host) ?: host,
+        )
+    }
+
+    /** Whether the user wants the always-on connection that receives items from the laptop. */
+    var listenEnabled: Boolean
+        get() = prefs.getBoolean("listen", false)
+        set(value) = prefs.edit().putBoolean("listen", value).apply()
+
+    fun save(p: Pairing) = prefs.edit()
+        .putString("host", p.host)
+        .putInt("port", p.port)
+        .putString("token", p.token)
+        .putString("fingerprint", p.fingerprint)
+        .putString("name", p.name)
+        .apply()
+
+    fun clear() = prefs.edit().clear().apply()
+}

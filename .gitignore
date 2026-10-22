@@ -1,0 +1,19 @@
+# Android / Gradle build output and caches
+android/.gradle/
+android/build/
+android/app/build/
+android/.idea/
+*.iml
+*.apk
+*.aab
+
+# Machine-specific (SDK path)
+android/local.properties
+
+# Python
+__pycache__/
+*.pyc
+
+# Never commit pairing secrets, even if one lands in the tree by accident
+*.pem
+token

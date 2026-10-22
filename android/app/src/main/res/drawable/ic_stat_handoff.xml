@@ -1,0 +1,10 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- laptop with an arrow leaving it; status-bar icons must be single-colour -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M5,6h9v2H7v7h10v-3h2v3h2v2H3v-2h2zM15,3l5,4l-5,4v-2.5h-3v-3h3z" />
+</vector>

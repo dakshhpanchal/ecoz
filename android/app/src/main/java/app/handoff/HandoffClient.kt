@@ -1,0 +1,136 @@
+package app.handoff
+
+import org.json.JSONObject
+import java.io.IOException
+import java.net.ConnectException
+import java.net.NoRouteToHostException
+import java.net.SocketTimeoutException
+import java.net.URL
+import java.security.MessageDigest
+import java.security.cert.CertificateException
+import java.security.cert.X509Certificate
+import javax.net.ssl.HostnameVerifier
+import javax.net.ssl.HttpsURLConnection
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLException
+import javax.net.ssl.X509TrustManager
+
+/** [unreachable] means the laptop wasn't contacted at all (wrong address / off network), so rediscovery may help. */
+data class Outcome(val ok: Boolean, val message: String, val unreachable: Boolean = false)
+
+/** Lets another thread cut a blocking [HandoffClient.listen] short. */
+class StreamHandle {
+    @Volatile private var connection: HttpsURLConnection? = null
+    internal fun attach(c: HttpsURLConnection) { connection = c }
+    fun close() { connection?.disconnect() }
+}
+
+/**
+ * HTTPS client for the laptop service. The laptop's certificate is self-signed, so
+ * instead of CA validation we pin its SHA-256 fingerprint from the pairing code. That
+ * pin is the laptop's identity, which is why hostname verification is skipped.
+ */
+object HandoffClient {
+    private const val CONNECT_TIMEOUT_MS = 4_000
+    private const val READ_TIMEOUT_MS = 6_000
+
+    /** The laptop sends a keepalive every 15 s; silence for 45 s means the link is dead. */
+    private const val STREAM_READ_TIMEOUT_MS = 45_000
+
+    fun ping(p: Pairing): Outcome = request(p, "GET", "/v1/ping", null)
+
+    fun send(p: Pairing, type: String, value: String): Outcome =
+        request(p, "POST", "/v1/handoff", JSONObject().put("type", type).put("value", value).toString())
+
+    fun ack(p: Pairing, eventId: String): Outcome =
+        request(p, "POST", "/v1/ack", JSONObject().put("id", eventId).toString())
+
+    /**
+     * Holds the laptop->phone event stream open and calls [onEvent] for each item, blocking
+     * until the connection ends. [onConnected] fires once the laptop accepts the stream.
+     */
+    fun listen(p: Pairing, handle: StreamHandle, onConnected: () -> Unit, onEvent: (JSONObject) -> Unit): Outcome =
+        guarded(p) {
+            val conn = connect(p, "GET", "/v1/events", STREAM_READ_TIMEOUT_MS)
+            handle.attach(conn)
+            try {
+                val code = conn.responseCode
+                if (code != 200) return@guarded statusOutcome(p, code)
+                onConnected()
+                conn.inputStream.bufferedReader().useLines { lines ->
+                    for (line in lines) {
+                        if (line.startsWith("data: ")) onEvent(JSONObject(line.removePrefix("data: ")))
+                    }
+                }
+                Outcome(false, "${p.name} closed the connection.")
+            } finally {
+                conn.disconnect()
+            }
+        }
+
+    private fun request(p: Pairing, method: String, path: String, body: String?): Outcome = guarded(p) {
+        val conn = connect(p, method, path, READ_TIMEOUT_MS)
+        try {
+            if (body != null) {
+                conn.doOutput = true
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.outputStream.use { it.write(body.toByteArray()) }
+            }
+            statusOutcome(p, conn.responseCode)
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    private fun connect(p: Pairing, method: String, path: String, readTimeoutMs: Int): HttpsURLConnection {
+        val tls = SSLContext.getInstance("TLS").apply { init(null, arrayOf(PinnedTrust(p.fingerprint)), null) }
+        return (URL("https://${p.host}:${p.port}$path").openConnection() as HttpsURLConnection).apply {
+            sslSocketFactory = tls.socketFactory
+            hostnameVerifier = HostnameVerifier { _, _ -> true }
+            requestMethod = method
+            connectTimeout = CONNECT_TIMEOUT_MS
+            readTimeout = readTimeoutMs
+            setRequestProperty("Authorization", "Bearer ${p.token}")
+        }
+    }
+
+    private fun statusOutcome(p: Pairing, code: Int): Outcome = when (code) {
+        200 -> Outcome(true, "Sent to ${p.name}")
+        401 -> Outcome(false, "Laptop rejected the pairing. Pair again.")
+        400 -> Outcome(false, "Laptop refused that link.")
+        else -> Outcome(false, "Laptop answered $code.")
+    }
+
+    private fun guarded(p: Pairing, block: () -> Outcome): Outcome = try {
+        block()
+    } catch (e: SSLException) {
+        if (e.causeChain().any { it is CertificateException })
+            Outcome(false, "Laptop identity changed. Pair again.")
+        else Outcome(false, "Secure connection failed.")
+    } catch (_: ConnectException) {
+        Outcome(false, "Can't reach ${p.name}. Same Wi-Fi? Is the service running?", unreachable = true)
+    } catch (_: NoRouteToHostException) {
+        Outcome(false, "No route to ${p.name}. Same Wi-Fi?", unreachable = true)
+    } catch (_: SocketTimeoutException) {
+        Outcome(false, "${p.name} didn't answer in time.", unreachable = true)
+    } catch (e: IOException) {
+        Outcome(false, "Network error: ${e.message ?: e::class.simpleName}")
+    }
+
+    private fun Throwable.causeChain(): Sequence<Throwable> = generateSequence(this) { it.cause }
+
+    private class PinnedTrust(private val expectedHex: String) : X509TrustManager {
+        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) =
+            throw CertificateException("client certificates are not used")
+
+        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
+            val leaf = chain.firstOrNull() ?: throw CertificateException("empty certificate chain")
+            val actual = MessageDigest.getInstance("SHA-256").digest(leaf.encoded)
+                .joinToString("") { "%02x".format(it) }
+            if (!MessageDigest.isEqual(actual.toByteArray(), expectedHex.toByteArray()))
+                throw CertificateException("certificate fingerprint mismatch")
+        }
+
+        override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+    }
+}
