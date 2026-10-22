@@ -40,6 +40,14 @@
             </intent-filter>
         </receiver>
 
+        <!-- Opened from a notification button: reads the clipboard while focused, then closes -->
+        <activity
+            android:name=".ClipboardSendActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@style/Theme.Ecoz.Share" />
+
         <!-- Share sheet target: "Send to laptop" -->
         <activity
             android:name=".ShareActivity"

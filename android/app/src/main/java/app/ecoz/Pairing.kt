@@ -51,6 +51,11 @@ class Store(context: Context) {
         get() = prefs.getBoolean("listen", false)
         set(value) = prefs.edit().putBoolean("listen", value).apply()
 
+    /** Keep the two clipboards in step automatically. */
+    var clipboardSync: Boolean
+        get() = prefs.getBoolean("clipboard_sync", true)
+        set(value) = prefs.edit().putBoolean("clipboard_sync", value).apply()
+
     fun save(p: Pairing) = prefs.edit()
         .putString("host", p.host)
         .putInt("port", p.port)

@@ -18,13 +18,13 @@ Send links and text between a Linux laptop and an Android phone over the local n
 For everyday use, link the wrapper onto your PATH:
 
     ln -s ~/probes/ecoz/bin/ecoz ~/.local/bin/ecoz
-    ecoz send https://example.com    # a link or text
-    ecoz send                        # whatever is on the clipboard (needs GSConnect's clipboard bridge)
+    ecoz send https://example.com    # a link or text to the phone
+    ecoz send                        # whatever is on the clipboard
+    ecoz sync off                    # pause automatic clipboard sync (on to resume)
 
-Bind `ecoz send` to a key in Settings > Keyboard > Custom Shortcuts (I use Super+Shift+P):
-copy a link or text, press the key, and it appears on the phone.
-
-The unit expects this repo at `~/probes/ecoz`; edit `ExecStart` if it lives elsewhere.
+Clipboard sync needs the GSConnect GNOME extension, whose clipboard bridge ecoz uses to read
+and write the Wayland clipboard. Anything you copy on the laptop lands on the phone's
+clipboard automatically (password-manager copies and anything over 64 KB are skipped).
 
 ## Phone
 
@@ -32,7 +32,10 @@ The unit expects this repo at `~/probes/ecoz`; edit `ExecStart` if it lives else
     adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 Open the app, paste the pairing code, then use Share → "Send to laptop". Turn on
-"Receive from laptop" to get items pushed from the laptop.
+"Receive from laptop" to get items and clipboard changes pushed from the laptop.
+
+Phone → laptop clipboard is one tap: "Send clipboard" in the ecoz notification. Android
+stops background apps from reading the clipboard, so it can't be automatic.
 
 ## Security model
 

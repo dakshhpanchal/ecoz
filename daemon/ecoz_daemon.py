@@ -7,6 +7,8 @@ Receives links/text from the phone over HTTPS on the LAN and opens them here.
   ecoz_daemon.py serve           run the service (default)
   ecoz_daemon.py send [link|text]   push a link or text to the phone
                                     (no argument: sends the current clipboard)
+  ecoz_daemon.py pull               ask the phone to send its clipboard here
+  ecoz_daemon.py sync [on|off]      show or switch automatic clipboard sync
 
 Security model: TLS with a self-signed certificate (the phone pins its SHA-256
 fingerprint) plus a random bearer token. Only http/https URLs are ever opened.
@@ -87,6 +89,74 @@ def set_clipboard(text):
         check=False, capture_output=True, timeout=5)
 
 
+# --- automatic clipboard sync -------------------------------------------------------
+CLIP_OFF_FLAG = CONF / "clipboard-sync-off"   # file present = sync paused
+SENSITIVE_MIMETYPES = ("x-kde-passwordManagerHint",)  # password managers mark their copies
+_clip_lock = threading.Lock()
+_last_clip = None  # last text synced in either direction; stops echoes and duplicates
+
+
+def clip_sync_enabled():
+    return not CLIP_OFF_FLAG.exists()
+
+
+def remember_clip(text):
+    global _last_clip
+    with _clip_lock:
+        _last_clip = text
+
+
+def watch_clipboard():
+    """Push every local clipboard change to the phone (laptop -> phone half of the sync)."""
+    try:
+        import gi
+        gi.require_version("Gio", "2.0")
+        from gi.repository import Gio, GLib
+    except ImportError:
+        return
+
+    def call(bus, method, reply):
+        return bus.call_sync(
+            GSCONNECT_CLIPBOARD, GSCONNECT_CLIPBOARD_PATH, GSCONNECT_CLIPBOARD, method,
+            None, GLib.VariantType(reply), Gio.DBusCallFlags.NONE, 3000, None).unpack()[0]
+
+    def changed(bus):
+        global _last_clip
+        try:
+            if not clip_sync_enabled() or any(m in SENSITIVE_MIMETYPES for m in call(bus, "GetMimetypes", "(as)")):
+                return False
+            text = call(bus, "GetText", "(s)")
+        except GLib.Error:
+            return False  # clipboard holds no text (an image, say) or the bridge is gone
+        if not text or len(text.encode()) > MAX_BODY - 1024:
+            return False
+        with _clip_lock:
+            if text == _last_clip:
+                return False
+            _last_clip = text
+        HUB.publish({"type": "clip", "value": text}, queue_offline=False)
+        return False
+
+    def run():
+        context = GLib.MainContext()
+        context.push_thread_default()
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+
+        def on_signal(*_):
+            # Wayland emits several signals per copy; settle briefly, then read once.
+            # The timer must be attached to this thread's context, not GLib's default one.
+            timer = GLib.timeout_source_new(150)
+            timer.set_callback(changed, bus)
+            timer.attach(context)
+
+        bus.signal_subscribe(
+            GSCONNECT_CLIPBOARD, GSCONNECT_CLIPBOARD, "OwnerChange", GSCONNECT_CLIPBOARD_PATH,
+            None, Gio.DBusSignalFlags.NONE, on_signal)
+        GLib.MainLoop(context).run()
+
+    threading.Thread(target=run, daemon=True, name="clipboard-watch").start()
+
+
 class Hub:
     """Fan-out of laptop->phone events with acknowledgement and retry.
 
@@ -117,8 +187,8 @@ class Hub:
         with self._lock:
             self._listeners.discard(q)
 
-    def publish(self, event):
-        event = {**event, "id": secrets.token_hex(6), "ts": time.time()}
+    def publish(self, event, queue_offline=True):
+        event = {**event, "id": secrets.token_hex(6), "ts": time.time(), "queue": queue_offline}
         return self._deliver(event)
 
     def ack(self, event_id):
@@ -133,7 +203,8 @@ class Hub:
             for e in stale:
                 del self._inflight[e["id"]]
         for e in stale:
-            self._deliver(e)
+            if e.get("type") != "clip":
+                self._deliver(e)
 
     def _deliver(self, event):
         with self._lock:
@@ -144,6 +215,8 @@ class Hub:
                 for q in self._listeners:
                     q.put(event)
                 return "delivered"
+            if not event.get("queue", True):
+                return "dropped"  # e.g. clipboard changes: stale by the time a phone reconnects
             self._pending.append(event)
             del self._pending[:-self.MAX_PENDING]
             return "queued"
@@ -152,14 +225,16 @@ class Hub:
 HUB = Hub()
 
 
-def check_item(kind, value):
+def check_item(kind, value, allowed=("url", "text")):
     """Return an error string, or None if the item is safe to act on."""
+    if kind not in allowed:
+        return "unknown type"
+    if kind == "clip" and not value:
+        return "empty clipboard"
     if kind == "url":
         parts = urlparse(value)
         if parts.scheme not in ("http", "https") or not parts.netloc:
             return "only http(s) urls"
-    elif kind != "text":
-        return "unknown type"
     return None
 
 
@@ -229,7 +304,9 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, KeyError, TypeError):
             return self._json(400, {"ok": False, "error": "bad request"})
 
-        error = check_item(kind, value)
+        # "pull" (ask the phone for its clipboard) only makes sense laptop -> phone
+        allowed = ("url", "text", "pull", "clip") if self.path == "/v1/push" else ("url", "text", "clip")
+        error = check_item(kind, value, allowed)
         if error:
             return self._json(400, {"ok": False, "error": error})
 
@@ -245,7 +322,12 @@ class Handler(BaseHTTPRequestHandler):
                 subprocess.Popen(["xdg-open", value], stdout=subprocess.DEVNULL,
                                  stderr=subprocess.DEVNULL, start_new_session=True)
             notify("Opened from phone", urlparse(value).netloc)
+        elif kind == "clip":  # automatic sync from the phone: silent
+            if clip_sync_enabled():
+                remember_clip(value)
+                set_clipboard(value)
         else:
+            remember_clip(value)
             set_clipboard(value)
             notify("Text from phone copied", value[:80])
         self._json(200, {"ok": True})
@@ -296,6 +378,7 @@ def serve():
             HUB.reap()
 
     threading.Thread(target=reaper, daemon=True).start()
+    watch_clipboard()
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(CERT, KEY)
@@ -338,6 +421,27 @@ def send_to_phone(words):
     if not value:
         report("Nothing to send: give a link or text, or copy something first.", failed=True)
     kind = "url" if re.fullmatch(r"https?://\S+", value) else "text"
+    push(kind, value)
+
+
+def sync_setting(args):
+    """CLI: show or change automatic clipboard sync (takes effect immediately)."""
+    CONF.mkdir(parents=True, exist_ok=True)
+    if args and args[0] == "off":
+        CLIP_OFF_FLAG.touch()
+    elif args and args[0] == "on":
+        CLIP_OFF_FLAG.unlink(missing_ok=True)
+    elif args:
+        sys.exit("usage: ecoz_daemon.py sync [on|off]")
+    report(f"Clipboard sync is {'on' if clip_sync_enabled() else 'off'}.")
+
+
+def pull_from_phone():
+    """CLI: ask the phone to send its clipboard; it needs one tap on the phone."""
+    push("pull", "")
+
+
+def push(kind, value):
     ctx = ssl.create_default_context(cafile=str(CERT))  # trust only our own certificate
     ctx.check_hostname = False
     conn = http.client.HTTPSConnection("127.0.0.1", PORT, context=ctx, timeout=5)
@@ -350,6 +454,10 @@ def send_to_phone(words):
         report(f"service not reachable ({e}); is ecoz.service running?", failed=True)
     if resp.status != 200:
         report(f"refused: {body.get('error', resp.status)}", failed=True)
+    if kind == "pull":
+        return report("Asked the phone. Tap “Send clipboard” on it, then paste here."
+                      if body["status"] == "delivered"
+                      else "Phone not connected; it will ask when it reconnects.")
     preview = value if len(value) <= 60 else value[:57] + "..."
     report(f"Sent to phone: {preview}" if body["status"] == "delivered"
            else f"Phone not connected; queued for 10 minutes: {preview}")
@@ -359,6 +467,10 @@ def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "serve"
     if cmd == "send":
         send_to_phone(sys.argv[2:])
+    elif cmd == "pull":
+        pull_from_phone()
+    elif cmd == "sync":
+        sync_setting(sys.argv[2:])
     elif cmd == "pair":
         print(pairing_code(ensure_identity()))
     elif cmd == "serve":

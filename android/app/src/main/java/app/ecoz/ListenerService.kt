@@ -5,8 +5,6 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -106,6 +104,8 @@ class ListenerService : Service() {
             when (event.optString("type")) {
                 "url" -> showLink(id, value)
                 "text" -> copyText(id, value)
+                "clip" -> if (Store(applicationContext).clipboardSync) ClipboardSync.apply(applicationContext, value)
+                "pull" -> showPullRequest(id)
             }
         }
         // Ack even duplicates, otherwise the laptop keeps re-sending them.
@@ -131,9 +131,28 @@ class ListenerService : Service() {
         notifications.notify(id.hashCode(), notification)
     }
 
+    /** The laptop wants our clipboard. Only a tap can grant that, since reading needs focus. */
+    private fun showPullRequest(id: String) {
+        val notification = NotificationCompat.Builder(this, CHANNEL_INCOMING)
+            .setSmallIcon(R.drawable.ic_stat_ecoz)
+            .setContentTitle("Laptop wants your clipboard")
+            .setContentText("Copy something, then tap to send it")
+            .setContentIntent(sendClipboardIntent())
+            .addAction(0, "Send clipboard", sendClipboardIntent())
+            .setAutoCancel(true)
+            .setTimeoutAfter(PULL_REQUEST_MS)
+            .build()
+        notifications.notify(id.hashCode(), notification)
+    }
+
+    private fun sendClipboardIntent(): PendingIntent = PendingIntent.getActivity(
+        this, 1, Intent(this, ClipboardSendActivity::class.java),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
+
     private fun copyText(id: String, text: String) {
         // Writing the clipboard from the background is allowed; only reading is restricted.
-        getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("From laptop", text))
+        ClipboardSync.apply(applicationContext, text)
         val notification = NotificationCompat.Builder(this, CHANNEL_INCOMING)
             .setSmallIcon(R.drawable.ic_stat_ecoz)
             .setContentTitle("Copied from laptop")
@@ -159,6 +178,7 @@ class ListenerService : Service() {
             .setContentTitle("ecoz")
             .setContentText(text)
             .setContentIntent(open)
+            .addAction(0, "Send clipboard", sendClipboardIntent())
             .setOngoing(true)
             .setSilent(true)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
@@ -182,6 +202,7 @@ class ListenerService : Service() {
         private const val MAX_BACKOFF_MS = 30_000L
         private const val MAX_SEEN = 100
         private const val TEXT_NOTICE_MS = 10_000L
+        private const val PULL_REQUEST_MS = 120_000L
 
         fun start(context: Context) {
             context.startForegroundService(Intent(context, ListenerService::class.java))

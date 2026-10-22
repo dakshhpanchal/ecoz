@@ -99,6 +99,7 @@ private fun EcozScreen(store: Store) {
         store.listenEnabled = on
         if (on) ListenerService.start(context) else ListenerService.stop(context)
     }
+    var clipboardSync by remember { mutableStateOf(store.clipboardSync) }
     // Notifications are the only way the phone can show what the laptop sends.
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         setReceiving(true)
@@ -182,6 +183,28 @@ private fun EcozScreen(store: Store) {
                                 )
                             }) { Text("Open app settings") }
                         }
+                    }
+                }
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Sync clipboard from laptop", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    if (clipboardSync) "Text you copy on the laptop lands here" else "Off",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                            }
+                            Switch(checked = clipboardSync, onCheckedChange = {
+                                clipboardSync = it
+                                store.clipboardSync = it
+                            })
+                        }
+                        Text(
+                            "To send what you copied here to the laptop, tap “Send clipboard” in the ecoz " +
+                                "notification. Android doesn't let apps watch the clipboard in the background.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
