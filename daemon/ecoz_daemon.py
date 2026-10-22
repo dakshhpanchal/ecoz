@@ -10,6 +10,8 @@ Receives links/text from the phone over HTTPS on the LAN and opens them here.
   ecoz_daemon.py pull               ask the phone to send its clipboard here
   ecoz_daemon.py sync [on|off]      show or switch automatic clipboard sync
   ecoz_daemon.py ring [stop]        make the phone ring (find my phone)
+  ecoz_daemon.py notif-action <key> <index> [text]
+                                    press a button on a phone notification (text = reply)
 
 Security model: TLS with a self-signed certificate (the phone pins its SHA-256
 fingerprint) plus a random bearer token. Only http/https URLs are ever opened.
@@ -240,6 +242,7 @@ class PhoneNotifications:
     def __init__(self):
         self._lock = threading.Lock()
         self._ids = {}  # phone notification key -> desktop notification id
+        self._actions = {}  # desktop id -> (phone key, title, routes, app, text, image path)
 
     @staticmethod
     def save_image(encoded):
@@ -290,29 +293,86 @@ class PhoneNotifications:
             "org.freedesktop.Notifications", method, GLib.Variant(fmt, args),
             GLib.VariantType(reply) if reply else None, Gio.DBusCallFlags.NONE, 3000, None)
 
-    def show(self, key, app, title, text, app_icon=None, image=None):
+    def show(self, key, app, title, text, app_icon=None, image=None, actions=()):
         from gi.repository import GLib
         with self._lock:
             replaces = self._ids.get(key, 0)
         hints = {"image-path": GLib.Variant("s", image)} if image else {}
+        # GNOME draws a few buttons: put Reply first, keep the rest in the phone's order.
+        usable = sorted((a for a in actions if isinstance(a, dict) and a.get("title")),
+                        key=lambda a: not a.get("reply"))[:3]
+        buttons, routes = [], {}
+        for a in usable:
+            button_id = f"a{int(a['index'])}"
+            buttons += [button_id, str(a["title"])[:30]]
+            routes[button_id] = (int(a["index"]), bool(a.get("reply")))
         reply = self._call(
             "Notify",
             (app[:80], replaces, app_icon or "phone-symbolic", GLib.markup_escape_text(title[:MAX_FIELD]),
-             GLib.markup_escape_text(text[:MAX_FIELD]), [], hints, -1),
+             GLib.markup_escape_text(text[:MAX_FIELD]), buttons, hints, -1),
             "(susssasa{sv}i)", "(u)")
         with self._lock:
-            self._ids[key] = reply.unpack()[0]
+            desktop_id = reply.unpack()[0]
+            self._ids[key] = desktop_id
+            self._actions[desktop_id] = (key, title, routes, app, text, image or app_icon or "")
+            if len(self._actions) > 200:
+                self._actions.pop(next(iter(self._actions)))
             if len(self._ids) > 200:  # bounded: forget the oldest entries
                 self._ids.pop(next(iter(self._ids)))
+
+    def action_invoked(self, desktop_id, button_id):
+        """A button on one of our notifications was pressed: reply window or straight to the phone."""
+        with self._lock:
+            entry = self._actions.get(desktop_id)
+        route = entry[2].get(button_id) if entry else None
+        if not route:
+            return
+        key, title, _, app, text, picture = entry
+        index, is_reply = route
+        if is_reply:  # needs text: ask for it
+            subprocess.Popen(
+                [sys.executable, "-I", str(Path(__file__).with_name("ecoz_reply.py")),
+                 key, str(index), title, app, text, picture],
+                stdin=subprocess.DEVNULL, start_new_session=True)
+        else:
+            HUB.publish({"type": "notif-action", "value": json.dumps({"key": key, "index": index})},
+                        queue_offline=False)
 
     def dismiss(self, key):
         with self._lock:
             desktop_id = self._ids.pop(key, None)
+            self._actions.pop(desktop_id, None)
         if desktop_id:
             self._call("CloseNotification", (desktop_id,), "(u)", None)
 
 
 PHONE_NOTIFICATIONS = PhoneNotifications()
+
+
+def watch_notification_actions():
+    """Route button presses on mirrored notifications back to the phone."""
+    try:
+        import gi
+        gi.require_version("Gio", "2.0")
+        from gi.repository import Gio, GLib
+    except ImportError:
+        return
+
+    def run():
+        context = GLib.MainContext()
+        context.push_thread_default()
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+
+        def on_signal(_bus, _sender, _path, _iface, _signal, params):
+            desktop_id, button_id = params.unpack()
+            PHONE_NOTIFICATIONS.action_invoked(desktop_id, button_id)
+
+        bus.signal_subscribe(
+            "org.freedesktop.Notifications", "org.freedesktop.Notifications", "ActionInvoked",
+            "/org/freedesktop/Notifications", None, Gio.DBusSignalFlags.NONE, on_signal)
+        GLib.MainLoop(context).run()
+
+    threading.Thread(target=run, daemon=True, name="notification-actions").start()
 
 
 def check_item(kind, value, allowed=("url", "text")):
@@ -323,6 +383,16 @@ def check_item(kind, value, allowed=("url", "text")):
         return "empty clipboard"
     if kind == "ring" and value not in ("start", "stop"):
         return "bad ring command"
+    if kind == "notif-action":
+        try:
+            action = json.loads(value)
+            ok = (isinstance(action.get("key"), str) and 0 < len(action["key"]) <= 300
+                  and isinstance(action.get("index"), int) and 0 <= action["index"] < 10
+                  and len(str(action.get("text", ""))) <= 2000)
+        except (ValueError, AttributeError):
+            ok = False
+        if not ok:
+            return "bad notification action"
     if kind == "url":
         parts = urlparse(value)
         if parts.scheme not in ("http", "https") or not parts.netloc:
@@ -392,7 +462,8 @@ class Handler(BaseHTTPRequestHandler):
                 PHONE_NOTIFICATIONS.show(
                     key, str(msg.get("app", "Phone")), str(msg.get("title", "")), str(msg.get("text", "")),
                     app_icon=PhoneNotifications.save_image(msg.get("appIcon")),
-                    image=PhoneNotifications.save_image(msg.get("image")))
+                    image=PhoneNotifications.save_image(msg.get("image")),
+                    actions=msg.get("actions") if isinstance(msg.get("actions"), list) else ())
         except (ValueError, KeyError, TypeError):
             return self._json(400, {"ok": False, "error": "bad request"})
         except Exception as e:  # desktop notification service unavailable
@@ -420,14 +491,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"ok": False, "error": "bad request"})
 
         # "pull" (ask the phone for its clipboard) only makes sense laptop -> phone
-        allowed = ("url", "text", "pull", "clip", "ring") if self.path == "/v1/push" else ("url", "text", "clip")
+        allowed = ("url", "text", "pull", "clip", "ring", "notif-action") if self.path == "/v1/push" else ("url", "text", "clip")
         error = check_item(kind, value, allowed)
         if error:
             return self._json(400, {"ok": False, "error": error})
 
         if self.path == "/v1/push":  # laptop -> phone
             # a ring request is pointless minutes later, so it is never queued for a reconnect
-            status = HUB.publish({"type": kind, "value": value}, queue_offline=(kind != "ring"))
+            status = HUB.publish({"type": kind, "value": value}, queue_offline=(kind not in ("ring", "notif-action")))
             return self._json(200, {"ok": True, "status": status})
 
         if kind == "url":  # phone -> laptop
@@ -496,6 +567,7 @@ def serve():
 
     threading.Thread(target=reaper, daemon=True).start()
     watch_clipboard()
+    watch_notification_actions()
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(CERT, KEY)
@@ -553,6 +625,16 @@ def sync_setting(args):
     report(f"Clipboard sync is {'on' if clip_sync_enabled() else 'off'}.")
 
 
+def notification_action(args):
+    """CLI: press a button on a phone notification; extra words are the reply text."""
+    if len(args) < 2 or not args[1].isdigit():
+        sys.exit("usage: ecoz_daemon.py notif-action <key> <index> [reply text]")
+    action = {"key": args[0], "index": int(args[1])}
+    if len(args) > 2:
+        action["text"] = " ".join(args[2:])
+    push("notif-action", json.dumps(action))
+
+
 def ring_phone(args):
     """CLI: make the phone ring so you can find it; `ring stop` silences it."""
     if args and args[0] not in ("stop", "start"):
@@ -578,6 +660,10 @@ def push(kind, value):
         report(f"service not reachable ({e}); is ecoz.service running?", failed=True)
     if resp.status != 200:
         report(f"refused: {body.get('error', resp.status)}", failed=True)
+    if kind == "notif-action":
+        if body["status"] != "delivered":
+            report("Phone isn't connected, so that didn't go through.", failed=True)
+        return
     if kind == "ring":
         return report(("Phone is ringing." if value == "start" else "Told the phone to stop.")
                       if body["status"] == "delivered" else "Phone isn't connected, so it can't ring.")
@@ -598,6 +684,8 @@ def main():
         pull_from_phone()
     elif cmd == "ring":
         ring_phone(sys.argv[2:])
+    elif cmd == "notif-action":
+        notification_action(sys.argv[2:])
     elif cmd == "sync":
         sync_setting(sys.argv[2:])
     elif cmd == "pair":

@@ -1,10 +1,14 @@
 package app.ecoz
 
 import android.app.Notification
+import android.app.PendingIntent
+import android.app.RemoteInput
+import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.graphics.Bitmap
 import android.graphics.drawable.Drawable
 import android.os.Build
+import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Base64
@@ -15,6 +19,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 
@@ -26,7 +31,19 @@ class NotificationMirrorService : NotificationListenerService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val recent = HashMap<String, Pair<String, Long>>() // key -> (last text, time sent)
 
+    /** Mirrored notifications still on the phone, so the laptop can press their buttons. */
+    private val active = LinkedHashMap<String, StatusBarNotification>()
+
+    override fun onListenerConnected() {
+        instance = this
+    }
+
+    override fun onListenerDisconnected() {
+        if (instance === this) instance = null
+    }
+
     override fun onDestroy() {
+        if (instance === this) instance = null
         scope.cancel()
         super.onDestroy()
     }
@@ -42,6 +59,11 @@ class NotificationMirrorService : NotificationListenerService() {
             ?: extras.getCharSequence(Notification.EXTRA_TEXT))?.toString().orEmpty()
         if (title.isBlank() && text.isBlank()) return
 
+        synchronized(active) {
+            active[sbn.key] = sbn
+            if (active.size > MAX_ACTIVE) active.remove(active.keys.first())
+        }
+
         // Apps re-post the same notification as progress updates; don't repeat it on the laptop.
         val now = System.currentTimeMillis()
         val last = recent[sbn.key]
@@ -51,6 +73,7 @@ class NotificationMirrorService : NotificationListenerService() {
 
         scope.launch {
             val body = JSONObject().put("key", sbn.key).put("app", appLabel(sbn)).put("title", title).put("text", text)
+            body.put("actions", actionsOf(sbn))
             appIcon(sbn)?.let { body.put("appIcon", it) }
             picture(sbn)?.let { body.put("image", it) }
             Sender.run(applicationContext, store, pairing) { target ->
@@ -60,6 +83,7 @@ class NotificationMirrorService : NotificationListenerService() {
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
+        synchronized(active) { active.remove(sbn.key) }
         val store = Store(applicationContext)
         if (!store.mirrorNotifications) return
         val pairing = store.load() ?: return
@@ -70,6 +94,39 @@ class NotificationMirrorService : NotificationListenerService() {
                     EcozClient.post(target, "/v1/notification/dismiss", JSONObject().put("key", sbn.key))
                 }
             }
+        }
+    }
+
+    /** The buttons the app put on this notification (Reply, Mark as read, ...), by position. */
+    private fun actionsOf(sbn: StatusBarNotification): JSONArray {
+        val list = JSONArray()
+        sbn.notification.actions?.forEachIndexed { index, action ->
+            val title = action.title?.toString()?.trim().orEmpty()
+            if (title.isEmpty() || action.actionIntent == null) return@forEachIndexed
+            val reply = action.remoteInputs?.any { it.allowFreeFormInput } == true
+            list.put(JSONObject().put("index", index).put("title", title).put("reply", reply))
+        }
+        return list
+    }
+
+    /** Presses button [index] on a mirrored notification; with [text], sends it as the reply. */
+    private fun perform(key: String, index: Int, text: String?) {
+        val action = synchronized(active) { active[key] }?.notification?.actions?.getOrNull(index) ?: return
+        val pending = action.actionIntent ?: return
+        try {
+            if (text == null) {
+                pending.send()
+                return
+            }
+            val inputs = action.remoteInputs ?: return
+            val results = Bundle().apply { inputs.forEach { putCharSequence(it.resultKey, text) } }
+            val fill = Intent()
+            RemoteInput.addResultsToIntent(inputs, fill, results)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P)
+                RemoteInput.setResultsSource(fill, RemoteInput.SOURCE_FREE_FORM_INPUT)
+            pending.send(applicationContext, 0, fill)
+        } catch (_: PendingIntent.CanceledException) {
+            // the app already dismissed or replaced the notification
         }
     }
 
@@ -131,11 +188,19 @@ class NotificationMirrorService : NotificationListenerService() {
         return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
     }
 
-    private companion object {
-        const val DUPLICATE_WINDOW_MS = 2_000L
-        const val MAX_RECENT = 200
-        const val APP_ICON_PX = 96
-        const val AVATAR_PX = 160
-        const val PICTURE_MAX_PX = 480
+    companion object {
+        @Volatile private var instance: NotificationMirrorService? = null
+
+        /** Called when the laptop presses a button; does nothing if the listener isn't bound. */
+        fun invoke(key: String, index: Int, text: String?) {
+            instance?.perform(key, index, text)
+        }
+
+        private const val MAX_ACTIVE = 100
+        private const val DUPLICATE_WINDOW_MS = 2_000L
+        private const val MAX_RECENT = 200
+        private const val APP_ICON_PX = 96
+        private const val AVATAR_PX = 160
+        private const val PICTURE_MAX_PX = 480
     }
 }

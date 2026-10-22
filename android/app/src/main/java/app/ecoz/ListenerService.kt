@@ -110,6 +110,12 @@ class ListenerService : Service() {
                 "clip" -> if (Store(applicationContext).clipboardSync) ClipboardSync.apply(applicationContext, value)
                 "pull" -> showPullRequest(id)
                 "ring" -> if (value == "start") startRinging() else stopRinging()
+                "notif-action" -> runCatching {
+                    val action = JSONObject(value)
+                    NotificationMirrorService.invoke(
+                        action.getString("key"), action.getInt("index"), action.optString("text").ifEmpty { null },
+                    )
+                }
             }
         }
         // Ack even duplicates, otherwise the laptop keeps re-sending them.
