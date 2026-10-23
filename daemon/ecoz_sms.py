@@ -19,7 +19,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, GLib, Gtk, Pango  # noqa: E402
 
-MINE_CSS = b".mine { background: alpha(@accent_bg_color, 0.45); color: @accent_fg_color; }"
+MINE_CSS = b".mine { background: var(--accent-bg-color); color: var(--accent-fg-color); } .mine .dim-label { color: var(--accent-fg-color); opacity: 0.7; }"
 DAEMON = Path(__file__).with_name("ecoz_daemon.py")
 REFRESH_SECONDS = 8
 

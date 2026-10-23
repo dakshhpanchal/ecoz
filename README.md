@@ -50,6 +50,22 @@ ecoz is a small pair of apps, one for a Linux laptop and one for an Android phon
       <p>It unlocks only when the phone is close, is itself unlocked, and signs a fresh challenge with a key in its secure hardware. A locked phone cannot unlock the laptop. Both are <b>off</b> until you turn them on.</p>
     </td>
   </tr>
+  <tr>
+    <td width="50%" valign="middle"><img src="docs/img/tile-sms.png" alt="The texts window on the laptop"></td>
+    <td width="50%" valign="middle">
+      <h3>Your texts, on the laptop</h3>
+      <p>Run <code>ecoz sms</code> to read and answer your phone's text messages in a window, with the conversation list on the left and the thread on the right. Contact names come from the phone.</p>
+      <p>Off until you turn on <b>Texts on the laptop</b> in the app. Plain SMS only: RCS chats cannot be read by any app.</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="middle"><img src="docs/img/tile-qs.png" alt="The ecoz Quick Settings tile, off and on"></td>
+    <td width="50%" valign="middle">
+      <h3>A Quick Settings tile, and a hotspot nudge</h3>
+      <p>Add the <b>ecoz</b> tile to the phone's Quick Settings to switch the connection to the laptop off and on without opening the app. Dark is off, light is on.</p>
+      <p>If the laptop loses its internet while the phone is close, the phone offers a one-tap shortcut to its hotspot switch, and the laptop rejoins by itself.</p>
+    </td>
+  </tr>
 </table>
 
 ## How it works
