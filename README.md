@@ -1,35 +1,56 @@
-# ecoz
+<p align="center">
+  <img src="docs/img/banner.png" alt="ecoz: your Linux laptop and Android phone, working as one" width="100%">
+</p>
 
-**Your Linux laptop and Android phone, working as one.**
+<p align="center">
+  <a href="https://github.com/dakshhpanchal/ecoz/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/dakshhpanchal/ecoz?color=ffb4ab&labelColor=1a1110&style=flat"></a> <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/dakshhpanchal/ecoz?color=ffb4ab&labelColor=1a1110&style=flat"></a> <a href="#requirements"><img alt="Linux" src="https://img.shields.io/badge/Linux-GNOME-ffb4ab?labelColor=1a1110&style=flat&logo=linux&logoColor=white"></a> <a href="#requirements"><img alt="Android" src="https://img.shields.io/badge/Android-10%2B-ffb4ab?labelColor=1a1110&style=flat&logo=android&logoColor=white"></a> <a href="https://github.com/dakshhpanchal/ecoz/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/dakshhpanchal/ecoz?color=ffb4ab&labelColor=1a1110&style=flat"></a>
+</p>
 
-[![Stars](https://img.shields.io/github/stars/dakshhpanchal/ecoz?style=flat&color=2ea043&labelColor=161b22)](https://github.com/dakshhpanchal/ecoz/stargazers)
-[![License](https://img.shields.io/github/license/dakshhpanchal/ecoz?style=flat&color=2ea043&labelColor=161b22)](LICENSE)
-[![Linux](https://img.shields.io/badge/Linux-GNOME-2ea043?style=flat&labelColor=161b22&logo=linux&logoColor=white)](#requirements)
-[![Android](https://img.shields.io/badge/Android-10%2B-2ea043?style=flat&labelColor=161b22&logo=android&logoColor=white)](#requirements)
-[![Last commit](https://img.shields.io/github/last-commit/dakshhpanchal/ecoz?style=flat&color=2ea043&labelColor=161b22)](https://github.com/dakshhpanchal/ecoz/commits/main)
+<p align="center">
+  <img src="docs/img/demo.gif" alt="Replying to a message from the laptop" width="560"><br>
+  <sub>Replying to a message from the laptop. The reply is sent from the phone.</sub>
+</p>
 
-![ecoz: the Android app, the laptop settings, a reply window and a file prompt](docs/screenshots/overview.png)
-
-ecoz is a small pair of apps, one for a Linux laptop and one for an Android phone, that makes the two behave like parts of the same machine, the way a Mac and an iPhone do.
-
-Share a link on the phone and it opens on the laptop. Copy on the laptop and paste on the phone. Reply to a message from your keyboard. Send files in both directions. Walk away and the laptop locks; sit back down and it unlocks.
-
-It runs on your own network. There is no server in the middle and no account to make.
+ecoz is a small pair of apps, one for a Linux laptop and one for an Android phone, that makes the two behave like parts of the same machine, the way a Mac and an iPhone do. It runs on your own network, with no server in the middle and no account to make.
 
 > **Status: early.** I built and tested it on Ubuntu 26.04 (GNOME 50, Wayland) with a Nothing Phone 3a on Android 16. It works well there. Other setups may need fixes, and [issues and pull requests](#contributing) are welcome.
 
-## What it does
+## What you get
 
-- **Links.** Share anything from the phone to *Send to laptop* and it opens in your browser.
-- **Clipboard.** Text you copy on the laptop lands on the phone's clipboard automatically. On the phone, one tap on *Send Clipboard* sends it back.
-- **Notifications.** Phone notifications show up on the laptop with the app icon, the sender's photo and the app's own buttons. *Reply* opens a small window, and a reply goes out from the phone. Dismiss a notification on the phone and it disappears from the laptop.
-- **Files, both ways.** Photos, videos, anything. They land in `~/Downloads/phone` on the laptop and `Download/laptop` on the phone. Right-click a file in Files and choose *Send to Phone*. Measured at about 45 to 55 MB/s over a 5 GHz hotspot.
-- **Asks first.** Every incoming file shows an Accept or Decline prompt before any data moves. Each device has its own switch, so you can ask on one side and not the other.
-- **Find my phone.** `ecoz ring` plays an alarm at full volume, even on silent.
-- **Lock when you walk away.** The phone sends a private Bluetooth beacon; when it is clearly out of range the laptop locks. It never locks while you are typing.
-- **Unlock when you are back.** Only when the phone is close, is itself unlocked, and signs a fresh challenge with a key kept in its secure hardware. A locked phone cannot unlock the laptop.
-
-Lock and unlock are off until you turn them on.
+<table>
+  <tr>
+    <td width="50%" valign="middle"><img src="docs/img/tile-reply.png" alt="The reply window on the laptop"></td>
+    <td width="50%" valign="middle">
+      <h3>Reply from your keyboard</h3>
+      <p>Phone notifications appear on the laptop with the app icon, the sender's photo and the app's own buttons.</p>
+      <p><b>Reply</b> opens a small window, and the reply goes out from your phone. Dismiss a notification on the phone and it disappears here. Tested with WhatsApp and Google Messages.</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="middle"><img src="docs/img/tile-files.png" alt="The phone asking whether to accept a file from the laptop"></td>
+    <td width="50%" valign="middle">
+      <h3>Files, with a yes or no first</h3>
+      <p>Send photos, videos or anything else in both directions. Right-click a file in Files and choose <b>Send to Phone</b>, or share from the phone to <b>Send to laptop</b>.</p>
+      <p>Every incoming file shows <b>Accept</b> or <b>Decline</b> before any data moves, and each device has its own switch. About 45 to 55 MB/s over a 5 GHz hotspot.</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="middle"><img src="docs/img/tile-phone.png" alt="The ecoz Android app"></td>
+    <td width="50%" valign="middle">
+      <h3>A small Android app</h3>
+      <p>Share a link to <b>Send to laptop</b> and it opens in your browser. Text you copy on the laptop lands on the phone's clipboard, and one tap on <b>Send Clipboard</b> sends it back.</p>
+      <p><code>ecoz ring</code> plays an alarm on the phone at full volume, even on silent.</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="middle"><img src="docs/img/tile-settings.png" alt="The settings window on the laptop"></td>
+    <td width="50%" valign="middle">
+      <h3>Lock when you leave, unlock when you are back</h3>
+      <p>The phone sends a private Bluetooth beacon. When it is clearly out of range the laptop locks, and never while you are typing.</p>
+      <p>It unlocks only when the phone is close, is itself unlocked, and signs a fresh challenge with a key in its secure hardware. A locked phone cannot unlock the laptop. Both are <b>off</b> until you turn them on.</p>
+    </td>
+  </tr>
+</table>
 
 ## How it works
 
@@ -52,29 +73,6 @@ Phone (Android app)                                               Laptop (Linux 
 │ works only if phone unlocked  │                                 │ checks distance + signature   │
 └───────────────────────────────┘                                 └───────────────────────────────┘
 ```
-
-## A closer look
-
-<table>
-  <tr>
-    <td width="50%"><img src="docs/screenshots/laptop-reply.png" alt="The reply window on the laptop"></td>
-    <td width="50%"><img src="docs/screenshots/phone-file-prompt.png" alt="The phone asking whether to accept a file from the laptop"></td>
-  </tr>
-  <tr>
-    <td><sub>Replying to a message from the laptop</sub></td>
-    <td><sub>The phone asks before it accepts a file</sub></td>
-  </tr>
-  <tr>
-    <td><img src="docs/screenshots/phone-app.png" alt="The Android app" width="300"> <img src="docs/screenshots/phone-settings.png" alt="The rest of the Android app's switches" width="300"></td>
-    <td><img src="docs/screenshots/laptop-settings.png" alt="The settings window on the laptop"></td>
-  </tr>
-  <tr>
-    <td><sub>The Android app</sub></td>
-    <td><sub>Settings on the laptop</sub></td>
-  </tr>
-</table>
-
-<sub>Screenshots use a sample contact and a placeholder address.</sub>
 
 ## Requirements
 
