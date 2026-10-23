@@ -44,6 +44,7 @@ class ListenerService : Service() {
     private var ringStopJob: Job? = null
     private var beaconJob: Job? = null
     private lateinit var beacon: Beacon
+    private lateinit var hotspotWatcher: HotspotWatcher
     private lateinit var notifications: NotificationManager
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -71,9 +72,16 @@ class ListenerService : Service() {
         if (job == null && store.listenEnabled) job = scope.launch { connectLoop() }
         if (beaconJob == null) {
             beacon = Beacon(applicationContext)
+            hotspotWatcher = HotspotWatcher(applicationContext)
             beaconJob = scope.launch {
-                // Follows the switch in the app, and rotates the beacon's tag every 30 seconds.
+                // Follows the switches in the app, rotates the beacon's tag every 30 seconds, and
+                // listens for the laptop asking for a hotspot while it is out of reach.
                 while (isActive) {
+                    val token = store.load()?.token
+                    hotspotWatcher.sync(
+                        enabled = store.hotspotHelp && store.listenEnabled, token = token,
+                        reachable = ListenerState.status.value.startsWith("Connected"),
+                    )
                     beacon.sync(store.proximityEnabled && store.listenEnabled, store.load()?.token)
                     delay(BEACON_TICK_MS)
                 }
@@ -84,6 +92,7 @@ class ListenerService : Service() {
 
     override fun onDestroy() {
         if (::beacon.isInitialized) beacon.stop()
+        if (::hotspotWatcher.isInitialized) hotspotWatcher.stop()
         RingController.stop(this)
         handle.close() // unblocks the read so the loop can exit
         scope.cancel()
@@ -138,6 +147,7 @@ class ListenerService : Service() {
                 "clip" -> if (Store(applicationContext).clipboardSync) ClipboardSync.apply(applicationContext, value)
                 "pull" -> showPullRequest(id)
                 "unlock-challenge" -> answerUnlockChallenge(pairing, value)
+                "sms-req" -> answerSmsRequest(pairing, value)
                 "files" -> runCatching { handleFileOffer(JSONObject(value).getJSONArray("files")) }
                 "ring" -> if (value == "start") startRinging() else stopRinging()
                 "notif-action" -> runCatching {
@@ -161,6 +171,16 @@ class ListenerService : Service() {
         val nonce = runCatching { android.util.Base64.decode(nonceB64, android.util.Base64.DEFAULT) }.getOrNull() ?: return
         val signature = UnlockKey.sign(nonce, pairing.fingerprint) ?: return
         EcozClient.answerUnlock(pairing, nonceB64, signature)
+    }
+
+    /** The laptop asks to list, read or send texts. Runs off the connection thread and posts the answer back. */
+    private fun answerSmsRequest(pairing: Pairing, raw: String) {
+        scope.launch(Dispatchers.IO) {
+            val request = runCatching { JSONObject(raw) }.getOrNull() ?: return@launch
+            val reply = SmsBridge.handle(applicationContext, Store(applicationContext), request)
+            reply.put("id", request.optString("id"))
+            EcozClient.post(pairing, "/v1/sms/response", reply)
+        }
     }
 
     /** The laptop wants to send files. Ask first, unless this phone's setting says to accept automatically. */

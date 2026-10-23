@@ -12,6 +12,8 @@ Receives links/text from the phone over HTTPS on the LAN and opens them here.
   ecoz_daemon.py send-file <path>... send files to the phone (it asks first, unless you turned that off there)
   ecoz_daemon.py confirm [on|off]   ask before accepting files from the phone (default on)
   ecoz_daemon.py settings           open the settings window
+  ecoz_daemon.py hotspot [on|off|test] call for a phone hotspot when the laptop has no internet (default off)
+  ecoz_daemon.py sms                open your phone's texts in a window (switch on in the phone app first)
   ecoz_daemon.py proximity [on|off] listen for the phone's Bluetooth beacon (needed for lock/unlock; default off)
   ecoz_daemon.py presence           show whether the phone is near, with the signal strength
   ecoz_daemon.py autolock [on|off]  lock the laptop when the phone walks away (default off)
@@ -48,6 +50,7 @@ PORT = int(os.environ.get("ECOZ_PORT", "8765"))
 CONF = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "ecoz"
 CERT, KEY, TOKEN_FILE = CONF / "cert.pem", CONF / "key.pem", CONF / "token"
 MAX_BODY = 64 * 1024
+MAX_SMS_BODY = 512 * 1024           # a page of conversations or messages from the phone
 MAX_NOTIFICATION_BODY = 768 * 1024  # notifications may carry an app icon and a picture
 MAX_IMAGE = 400 * 1024
 FILE_CHUNK = 1 << 20           # 1 MiB per read/write while streaming files
@@ -152,6 +155,10 @@ PRESENCE = None                              # the running ecoz_presence.Presenc
 
 def autolock_enabled():
     return AUTOLOCK_ON_FLAG.exists()
+
+
+HOTSPOT_TEST_FLAG = CONF / "hotspot-test"     # holds the time until which to pretend to be offline (for testing)
+HOTSPOT_ON_FLAG = CONF / "hotspot-on"         # file present = call for a hotspot when offline (off by default)
 
 
 def proximity_enabled():
@@ -266,7 +273,7 @@ class Hub:
             for e in stale:
                 del self._inflight[e["id"]]
         for e in stale:
-            if e.get("type") not in ("clip", "unlock-challenge"):  # stale by the next retry
+            if e.get("type") not in ("clip", "unlock-challenge", "sms-req"):  # stale by the next retry
                 self._deliver(e)
 
     def _deliver(self, event):
@@ -286,6 +293,49 @@ class Hub:
 
 
 HUB = Hub()
+
+
+class SmsRelay:
+    """Asks the phone for texts and waits for its answer.
+
+    The laptop's windows talk to the local service; the service forwards each request to the phone
+    over the event stream and hands back whatever the phone posts to /v1/sms/response. Nothing is
+    stored here: the phone holds the messages, and a request nobody answers just times out.
+    """
+    TIMEOUT = 15
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._waiting = {}  # request id -> [event, reply]
+
+    def ask(self, request):
+        request_id = secrets.token_hex(6)
+        slot = [threading.Event(), None]
+        with self._lock:
+            self._waiting[request_id] = slot
+        try:
+            status = HUB.publish({"type": "sms-req", "value": json.dumps({**request, "id": request_id})},
+                                 queue_offline=False)
+            if status != "delivered":
+                return {"ok": False, "error": "The phone isn't connected."}
+            if not slot[0].wait(self.TIMEOUT):
+                return {"ok": False, "error": "The phone didn't answer."}
+            return slot[1]
+        finally:
+            with self._lock:
+                self._waiting.pop(request_id, None)
+
+    def answer(self, request_id, reply):
+        with self._lock:
+            slot = self._waiting.get(request_id)
+        if slot is None:
+            return False
+        slot[1] = reply
+        slot[0].set()
+        return True
+
+
+SMS = SmsRelay()
 
 
 # --- file transfer -----------------------------------------------------------------
@@ -848,6 +898,40 @@ class Handler(BaseHTTPRequestHandler):
         print(f"unlock answer: {result}", file=sys.stderr, flush=True)  # reasons stay in the journal
         self._json(200, {"ok": True, "unlocked": result == "unlocked"})
 
+    def _sms_request(self):
+        """Local window -> phone: list threads, read one, or send. Only processes on this laptop may ask."""
+        if not self._is_local():
+            return self._json(403, {"ok": False, "error": "local only"})
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= MAX_BODY:
+                raise ValueError("bad length")
+            msg = json.loads(self.rfile.read(length))
+            op = msg["op"]
+            if op == "threads":
+                request = {"op": op}
+            elif op == "messages":
+                request = {"op": op, "thread_id": int(msg["thread_id"])}
+            elif op == "send":
+                request = {"op": op, "address": str(msg["address"])[:40], "text": str(msg["text"])[:1600]}
+            else:
+                raise ValueError("unknown op")
+        except (ValueError, KeyError, TypeError):
+            return self._json(400, {"ok": False, "error": "bad request"})
+        self._json(200, SMS.ask(request))
+
+    def _sms_response(self):
+        """Phone -> laptop: the answer to a text request."""
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= MAX_SMS_BODY:
+                raise ValueError("bad length")
+            msg = json.loads(self.rfile.read(length))
+            request_id = str(msg.pop("id"))
+        except (ValueError, KeyError, TypeError, AttributeError):
+            return self._json(400, {"ok": False, "error": "bad request"})
+        self._json(200, {"ok": SMS.answer(request_id, msg)})
+
     def _file_offer(self):
         """Phone -> laptop, step 1: describe the files, wait for the laptop's answer, hand out tickets."""
         try:
@@ -1026,7 +1110,8 @@ class Handler(BaseHTTPRequestHandler):
         is_decline = self.path.startswith("/v1/file/") and self.path.endswith("/decline")
         if not is_decline and self.path not in ("/v1/handoff", "/v1/push", "/v1/ack", "/v1/notification",
                                                 "/v1/notification/dismiss", "/v1/file", "/v1/file/offer",
-                                                "/v1/unlock/register", "/v1/unlock/response"):
+                                                "/v1/unlock/register", "/v1/unlock/response",
+                                                "/v1/sms", "/v1/sms/response"):
             return self._json(404, {"ok": False})
         if not self._authed():
             return self._json(401, {"ok": False, "error": "unauthorized"})
@@ -1041,6 +1126,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._receive_file()
         if self.path == "/v1/file/offer":
             return self._file_offer()
+        if self.path == "/v1/sms":
+            return self._sms_request()
+        if self.path == "/v1/sms/response":
+            return self._sms_response()
         if self.path == "/v1/unlock/register":
             return self._unlock_register()
         if self.path == "/v1/unlock/response":
@@ -1181,6 +1270,41 @@ def unlock_loop():
         time.sleep(1)
 
 
+def hotspot_loop(token):
+    """While the laptop has no internet (and the user allowed it), broadcast a request the phone can see."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import ecoz_hotspot
+    watch = ecoz_hotspot.OfflineWatch()
+    state = {"offline": False}
+
+    def wanted():
+        return state["offline"]
+
+    advertiser = ecoz_hotspot.Advertiser(token, wanted)
+    advertiser.start()
+    was_calling = False
+    while True:
+        try:
+            testing = False
+            try:
+                testing = time.time() < float(HOTSPOT_TEST_FLAG.read_text())
+            except (OSError, ValueError):
+                pass
+            state["offline"] = testing or (HOTSPOT_ON_FLAG.exists() and watch.offline())
+            if state["offline"]:
+                if advertiser.active:
+                    ecoz_hotspot.rescan_wifi()  # the hotspot may have just come up
+                was_calling = True
+            elif was_calling:
+                was_calling = False
+                print("hotspot: back online", file=sys.stderr, flush=True)
+            if advertiser.error:
+                print(f"hotspot advert: {advertiser.error}", file=sys.stderr, flush=True)
+        except Exception as e:
+            print(f"hotspot error: {e}", file=sys.stderr, flush=True)
+        time.sleep(2)
+
+
 def presence_supervisor(token):
     """Start or stop Bluetooth scanning as the user switches proximity on and off."""
     global PRESENCE
@@ -1188,6 +1312,7 @@ def presence_supervisor(token):
     import ecoz_presence
     threading.Thread(target=autolock_loop, daemon=True, name="autolock").start()
     threading.Thread(target=unlock_loop, daemon=True, name="unlock").start()
+    threading.Thread(target=hotspot_loop, args=(token,), daemon=True, name="hotspot").start()
     while True:
         wanted = proximity_enabled()
         if wanted and PRESENCE is None:
@@ -1338,6 +1463,38 @@ def confirm_setting(args):
     flag_setting("Asking before accepting files from the phone", CONFIRM_OFF_FLAG, args, "ecoz_daemon.py confirm")
 
 
+def hotspot_setting(args):
+    """CLI: show or switch "ask the phone for a hotspot when the laptop is offline". `test` broadcasts for a minute."""
+    CONF.mkdir(parents=True, exist_ok=True)
+    if args and args[0] == "on":
+        HOTSPOT_ON_FLAG.touch()
+    elif args and args[0] == "off":
+        HOTSPOT_ON_FLAG.unlink(missing_ok=True)
+    elif args and args[0] == "test":
+        HOTSPOT_TEST_FLAG.write_text(str(time.time() + 60))  # the service broadcasts for the next minute
+        return report("Broadcasting the hotspot request for a minute, as if the laptop were offline.")
+    elif args:
+        sys.exit("usage: ecoz_daemon.py hotspot [on|off|test]")
+    report(f"Asking the phone for a hotspot when offline is {'on' if HOTSPOT_ON_FLAG.exists() else 'off'}.")
+
+
+def open_sms():
+    subprocess.Popen([sys.executable, "-I", str(Path(__file__).with_name("ecoz_sms.py"))],
+                     stdin=subprocess.DEVNULL, start_new_session=True)
+
+
+def sms_call(args):
+    """CLI (used by the texts window): send one request to the running service, print its JSON reply."""
+    ctx = ssl.create_default_context(cafile=str(CERT))
+    ctx.check_hostname = False
+    conn = http.client.HTTPSConnection("127.0.0.1", PORT, context=ctx, timeout=SmsRelay.TIMEOUT + 5)
+    try:
+        conn.request("POST", "/v1/sms", " ".join(args), {"Authorization": f"Bearer {ensure_identity()}"})
+        print(conn.getresponse().read().decode())
+    except OSError as e:
+        print(json.dumps({"ok": False, "error": f"The ecoz service isn't reachable ({e})."}))
+
+
 def open_settings():
     subprocess.Popen([sys.executable, "-I", str(Path(__file__).with_name("ecoz_settings.py"))],
                      stdin=subprocess.DEVNULL, start_new_session=True)
@@ -1451,6 +1608,12 @@ def main():
         unlock_setting(sys.argv[2:])
     elif cmd == "settings":
         open_settings()
+    elif cmd == "hotspot":
+        hotspot_setting(sys.argv[2:])
+    elif cmd == "sms":
+        open_sms()
+    elif cmd == "sms-call":
+        sms_call(sys.argv[2:])
     elif cmd == "pair":
         print(pairing_code(ensure_identity()))
     elif cmd == "serve":

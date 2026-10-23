@@ -120,7 +120,7 @@ The code contains a secret. Do not post it anywhere public.
 
 ### 4. Turn things on
 
-In the app, switch on **Receive from laptop**, and then whichever of **Mirror notifications**, **Tell the laptop when I'm close** and **Let my phone unlock the laptop** you want. On the laptop, open **ecoz** from the app grid (or run `ecoz settings`).
+In the app, switch on **Receive from laptop**, and then whichever of **Mirror notifications**, **Tell the laptop when I'm close**, **Let my phone unlock the laptop**, **Texts on the laptop** and **Hotspot for the laptop** you want. You can also add the **ecoz** tile to the phone's Quick Settings to turn it on and off. On the laptop, open **ecoz** from the app grid (or run `ecoz settings`).
 
 Try it: share a link from Chrome to *Send to laptop*, copy some text on the laptop and paste it on the phone, or run `ecoz ring`.
 
@@ -132,6 +132,8 @@ Try it: share a link from Chrome to *Send to laptop*, copy some text on the lapt
 | `ecoz send-file a.jpg b.pdf` | Offer files to the phone. It asks first, unless you turned that off there. |
 | `ecoz ring` / `ecoz ring stop` | Find my phone. |
 | `ecoz settings` | The settings window. |
+| `ecoz sms` | Read and answer your phone's texts in a window (switch it on in the app first). |
+| `ecoz hotspot [on\|off\|test]` | When the laptop has no internet and the phone is close, make the phone offer its hotspot switch. `test` pretends to be offline for a minute. |
 | `ecoz confirm [on\|off]` | Ask before accepting files from the phone (default on). |
 | `ecoz sync [on\|off]` | Share the clipboard with the phone. |
 | `ecoz proximity [on\|off]`, `ecoz presence` | Listen for the phone's beacon, and show *near*, *mid* or *away* with the signal strength. |
@@ -165,7 +167,8 @@ ecoz does not replace the mature tools. It aims at one thing: the feel of Apple'
 | Lock and unlock with the phone | yes | not that I know of | no |
 | Ask before accepting files, per device | yes | not that I know of | no |
 | Notification replies | yes | yes | no |
-| SMS and calls, media control, remote input | not yet | yes | no |
+| SMS | plain SMS only, no RCS | yes | no |
+| Calls, media control, remote input | not yet | yes | no |
 | Other desktops (KDE, Windows, macOS) | GNOME only for now | yes | yes |
 | Maturity | early | many years | many years |
 
@@ -177,7 +180,8 @@ If you want a proven toolbox, use KDE Connect. If you want the unlock and the on
 - **You build the phone app yourself.** There is no Play Store or F-Droid release yet.
 - **Pairing is manual.** There is no QR code yet.
 - **Phone to laptop clipboard needs one tap.** Android stops background apps from reading the clipboard. I tried the known workarounds on an Android 16 phone and they do not work there.
-- **No SMS yet.** RCS chats cannot be read from the phone by any app, though you can already reply to their notifications.
+- **Texts are plain SMS only.** RCS chats ("Chat features") cannot be read by any app, though you can reply to their notifications. Texts you send from the laptop do not show up in the Messages app, because only the default messaging app may write there. Bank and login codes will be visible on the laptop, so leave this off on a shared computer.
+- **The hotspot is one tap, not zero.** Android does not let apps switch it on, so the phone shows a notification that opens the switch.
 - **Folders cannot be sent yet,** only files.
 - Tested on **one** setup.
 
@@ -186,9 +190,9 @@ If you want a proven toolbox, use KDE Connect. If you want the unlock and the on
 - [x] Links, clipboard, notifications with replies, find my phone
 - [x] File transfer both ways, asking first on each device
 - [x] Auto-lock and unlock with a hardware-backed key
-- [ ] One-tap "turn on hotspot" when the laptop is near and offline
+- [x] One-tap hotspot when the laptop is near and offline
 - [ ] QR-code pairing
-- [ ] SMS in a laptop window
+- [x] SMS in a laptop window, and a Quick Settings tile to switch ecoz on and off
 - [ ] Send folders
 - [ ] Release builds: signed APK, F-Droid, `.deb`
 - [ ] KDE Plasma and other desktops, X11

@@ -40,7 +40,7 @@ def flag_switch(title, subtitle, flag, on_when_present):
 
 class SettingsWindow(Adw.ApplicationWindow):
     def __init__(self, app):
-        super().__init__(application=app, title="ecoz", default_width=520, default_height=622)
+        super().__init__(application=app, title="ecoz", default_width=520, default_height=700)
 
         files = Adw.PreferencesGroup(title="Files from the phone")
         files.add(flag_switch(
@@ -71,10 +71,18 @@ class SettingsWindow(Adw.ApplicationWindow):
             "with a key kept in its secure hardware. Set up from the ecoz app on the phone first.",
             CONF / "unlock-on", on_when_present=True))
 
+        network = Adw.PreferencesGroup(title="Internet")
+        network.add(flag_switch(
+            "Ask my phone for a hotspot when I'm offline",
+            "When the laptop has had no internet for a few seconds and your phone is close, the phone offers a "
+            "one-tap shortcut to its hotspot switch. Needs “Hotspot for the laptop” turned on in the phone app.",
+            CONF / "hotspot-on", on_when_present=True))
+
         page = Adw.PreferencesPage()
         page.add(files)
         page.add(clipboard)
         page.add(proximity)
+        page.add(network)
         view = Adw.ToolbarView()
         view.add_top_bar(Adw.HeaderBar())
         view.set_content(page)

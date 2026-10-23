@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.util.Log
 import java.nio.ByteBuffer
+import java.security.MessageDigest
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
@@ -77,12 +78,23 @@ class Beacon(private val context: Context) {
         const val COMPANY_ID = 0xFFFF        // reserved for internal use / testing
         const val VERSION = 1
         const val ROLE_PHONE = 1
+        const val ROLE_LAPTOP = 2
         private const val WINDOW_SECONDS = 30L
 
         private fun hmac(key: ByteArray, message: ByteArray): ByteArray =
             Mac.getInstance("HmacSHA256").run { init(SecretKeySpec(key, "HmacSHA256")); doFinal(message) }
 
         fun beaconKey(token: String): ByteArray = hmac(token.toByteArray(), "ecoz-beacon-v1".toByteArray())
+
+        /** True if [data] is a genuine beacon with [role] from the paired device (tag checked for the current and adjacent windows). */
+        fun verify(token: String, data: ByteArray, role: Int): Boolean {
+            if (data.size != 10 || data[0].toInt() != VERSION || data[1].toInt() != role) return false
+            val now = System.currentTimeMillis() / 1000 / WINDOW_SECONDS
+            return (now - 1..now + 1).any { counter ->
+                val message = ByteBuffer.allocate(9).put(role.toByte()).putLong(counter).array()
+                MessageDigest.isEqual(hmac(beaconKey(token), message).copyOf(8), data.copyOfRange(2, 10))
+            }
+        }
 
         fun payload(token: String, counter: Long): ByteArray {
             val message = ByteBuffer.allocate(9).put(ROLE_PHONE.toByte()).putLong(counter).array()

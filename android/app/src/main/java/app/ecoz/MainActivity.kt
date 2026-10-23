@@ -113,6 +113,17 @@ private fun EcozScreen(store: Store, resumeTick: Int) {
     var confirmFiles by remember { mutableStateOf(store.confirmIncomingFiles) }
     var proximity by remember { mutableStateOf(store.proximityEnabled) }
     var unlock by remember { mutableStateOf(store.unlockEnabled) }
+    var texts by remember { mutableStateOf(store.smsEnabled) }
+    var hotspotHelp by remember { mutableStateOf(store.hotspotHelp) }
+    val smsPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        val ok = granted[Manifest.permission.READ_SMS] == true
+        texts = ok
+        store.smsEnabled = ok
+    }
+    val hotspotPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        hotspotHelp = ok
+        store.hotspotHelp = ok
+    }
     var unlockNote by remember { mutableStateOf<String?>(null) }
     var unlockBusy by remember { mutableStateOf(false) }
     val nearbyPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
@@ -254,6 +265,52 @@ private fun EcozScreen(store: Store, resumeTick: Int) {
                             "Used for locking the laptop when you walk away. The beacon is recognisable only by " +
                                 "your laptop, changes every 30 seconds, and carries no name or location. " +
                                 "It's also switched on separately on the laptop: run  ecoz proximity on .",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Texts on the laptop", style = MaterialTheme.typography.titleMedium)
+                                Text(if (texts) "On: the laptop can read and send texts" else "Off", style = MaterialTheme.typography.bodyMedium)
+                            }
+                            Switch(checked = texts, onCheckedChange = { on ->
+                                if (on) smsPermission.launch(
+                                    arrayOf(Manifest.permission.READ_SMS, Manifest.permission.SEND_SMS, Manifest.permission.READ_CONTACTS)
+                                ) else {
+                                    texts = false
+                                    store.smsEnabled = false
+                                }
+                            })
+                        }
+                        Text(
+                            "Open them on the laptop with  ecoz sms . Only plain SMS works: chats using RCS " +
+                                "(“Chat features”) are not readable by any app. Codes sent by banks and sites " +
+                                "will be visible on the laptop too, so turn this off on a shared computer.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Hotspot for the laptop", style = MaterialTheme.typography.titleMedium)
+                                Text(if (hotspotHelp) "On: I'll offer the hotspot switch when it's needed" else "Off", style = MaterialTheme.typography.bodyMedium)
+                            }
+                            Switch(checked = hotspotHelp, onCheckedChange = { on ->
+                                if (on) hotspotPermission.launch(Manifest.permission.BLUETOOTH_SCAN) else {
+                                    hotspotHelp = false
+                                    store.hotspotHelp = false
+                                }
+                            })
+                        }
+                        Text(
+                            "When the laptop is close and has no internet, a notification opens the hotspot " +
+                                "switch in one tap (Android doesn't let apps turn it on themselves). Also switch " +
+                                "it on at the laptop in  ecoz settings .",
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }

@@ -56,6 +56,16 @@ class Store(context: Context) {
         get() = prefs.getBoolean("unlock", false)
         set(value) = prefs.edit().putBoolean("unlock", value).apply()
 
+    /** The laptop may list, read and send texts through this phone. Off until the user turns it on. */
+    var smsEnabled: Boolean
+        get() = prefs.getBoolean("sms", false)
+        set(value) = prefs.edit().putBoolean("sms", value).apply()
+
+    /** Offer a shortcut to the hotspot switch when the laptop nearby has no internet. */
+    var hotspotHelp: Boolean
+        get() = prefs.getBoolean("hotspot_help", false)
+        set(value) = prefs.edit().putBoolean("hotspot_help", value).apply()
+
     /** Broadcast the proximity beacon (for lock/unlock and hotspot help). Off until the user turns it on. */
     var proximityEnabled: Boolean
         get() = prefs.getBoolean("proximity", false)
