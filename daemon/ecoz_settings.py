@@ -40,7 +40,7 @@ def flag_switch(title, subtitle, flag, on_when_present):
 
 class SettingsWindow(Adw.ApplicationWindow):
     def __init__(self, app):
-        super().__init__(application=app, title="ecoz", default_width=520, default_height=560)
+        super().__init__(application=app, title="ecoz", default_width=520, default_height=622)
 
         files = Adw.PreferencesGroup(title="Files from the phone")
         files.add(flag_switch(

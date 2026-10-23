@@ -1,50 +1,88 @@
-<p align="center">
-  <img src="docs/banner.svg" alt="ecoz: your Linux laptop and Android phone, working as one" width="100%">
-</p>
+# ecoz
 
-<p align="center">
-  <a href="https://github.com/dakshhpanchal/ecoz/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/dakshhpanchal/ecoz?style=for-the-badge&logo=github&color=a78bfa"></a>
-  <a href="https://github.com/dakshhpanchal/ecoz/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/dakshhpanchal/ecoz?style=for-the-badge&color=22d3ee"></a>
-  <img alt="Status: early" src="https://img.shields.io/badge/status-early-orange?style=for-the-badge">
-  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-2ea043?style=for-the-badge"></a>
-</p>
-<p align="center">
-  <img alt="Linux GNOME" src="https://img.shields.io/badge/Linux-GNOME%20%C2%B7%20Wayland-1f6feb?logo=linux&logoColor=white">
-  <img alt="Android 10+" src="https://img.shields.io/badge/Android-10%2B-3DDC84?logo=android&logoColor=white">
-  <img alt="Python" src="https://img.shields.io/badge/laptop-Python%20%C2%B7%20no%20pip%20deps-3776AB?logo=python&logoColor=white">
-  <img alt="Kotlin" src="https://img.shields.io/badge/phone-Kotlin%20%C2%B7%20Compose%20%C2%B7%20Material%203-7F52FF?logo=kotlin&logoColor=white">
-</p>
+**Your Linux laptop and Android phone, working as one.**
 
-<p align="center">
-  <b>Tap a link on your phone and it opens on your laptop. Copy on the laptop and paste on the phone.<br>
-  Reply to messages from your keyboard. Walk away and the laptop locks. Sit down and it unlocks.</b><br>
-  <sub>Open source, no cloud, no account: your two devices talk directly, over your own network.</sub>
-</p>
+[![Stars](https://img.shields.io/github/stars/dakshhpanchal/ecoz?style=flat&color=2ea043&labelColor=161b22)](https://github.com/dakshhpanchal/ecoz/stargazers)
+[![License](https://img.shields.io/github/license/dakshhpanchal/ecoz?style=flat&color=2ea043&labelColor=161b22)](LICENSE)
+[![Linux](https://img.shields.io/badge/Linux-GNOME-2ea043?style=flat&labelColor=161b22&logo=linux&logoColor=white)](#requirements)
+[![Android](https://img.shields.io/badge/Android-10%2B-2ea043?style=flat&labelColor=161b22&logo=android&logoColor=white)](#requirements)
+[![Last commit](https://img.shields.io/github/last-commit/dakshhpanchal/ecoz?style=flat&color=2ea043&labelColor=161b22)](https://github.com/dakshhpanchal/ecoz/commits/main)
 
----
+![ecoz: the Android app, the laptop settings, a reply window and a file prompt](docs/screenshots/overview.png)
 
-## ✨ What you get
+ecoz is a small pair of apps, one for a Linux laptop and one for an Android phone, that makes the two behave like parts of the same machine, the way a Mac and an iPhone do.
 
-| | Feature | How it works |
-|---|---|---|
-| 🔗 | **Open links on the laptop** | Share anything from the phone → **Send to laptop**. |
-| 📋 | **Shared clipboard** | What you copy on the laptop lands on the phone automatically. On the phone, one tap on **Send Clipboard** sends it back. |
-| 🔔 | **Phone notifications on the laptop** | With the app icon, the sender's photo and the app's own buttons. **Reply** from a small native window. Tested with **WhatsApp** and **Google Messages**; any app that puts a reply box in its notification should work too. Dismiss on the phone and it disappears here. |
-| 📁 | **Fast file transfer, both ways** | Photos, videos, anything, to `~/Downloads/phone` or the phone's `Download/laptop`. Right-click in Files → **Send to Phone**. About **45–55 MB/s** measured over a 5 GHz hotspot. |
-| 🛡️ | **Asks before it accepts anything** | Every incoming file triggers an **Accept / Decline** prompt. Each device has its **own** switch, so you can ask on one side and not the other. |
-| 📍 | **Find my phone** | `ecoz ring` plays an alarm at full volume, even on silent. |
-| 🔒 | **Locks when you walk away** | A private Bluetooth beacon tells the laptop when your phone leaves. It never locks while you're typing. |
-| 🔓 | **Unlocks when you're back** | Only if the phone is **close, unlocked and proves itself** with a key in its secure hardware. A locked phone cannot unlock it. |
+Share a link on the phone and it opens on the laptop. Copy on the laptop and paste on the phone. Reply to a message from your keyboard. Send files in both directions. Walk away and the laptop locks; sit back down and it unlocks.
 
-Everything is **opt-in where it matters** (lock and unlock are off until you turn them on), and nothing ever leaves your local network.
+It runs on your own network. There is no server in the middle and no account to make.
 
-> **Honest status:** ecoz is young and built for one setup (Ubuntu 26.04 · GNOME 50 · Wayland and a Nothing Phone 3a on Android 16). It works well there; other setups may need tweaks. [Issues and PRs are very welcome.](#-contributing)
+> **Status: early.** I built and tested it on Ubuntu 26.04 (GNOME 50, Wayland) with a Nothing Phone 3a on Android 16. It works well there. Other setups may need fixes, and [issues and pull requests](#contributing) are welcome.
 
----
+## What it does
 
-## 🚀 Quick start
+- **Links.** Share anything from the phone to *Send to laptop* and it opens in your browser.
+- **Clipboard.** Text you copy on the laptop lands on the phone's clipboard automatically. On the phone, one tap on *Send Clipboard* sends it back.
+- **Notifications.** Phone notifications show up on the laptop with the app icon, the sender's photo and the app's own buttons. *Reply* opens a small window, and a reply goes out from the phone. Dismiss a notification on the phone and it disappears from the laptop.
+- **Files, both ways.** Photos, videos, anything. They land in `~/Downloads/phone` on the laptop and `Download/laptop` on the phone. Right-click a file in Files and choose *Send to Phone*. Measured at about 45 to 55 MB/s over a 5 GHz hotspot.
+- **Asks first.** Every incoming file shows an Accept or Decline prompt before any data moves. Each device has its own switch, so you can ask on one side and not the other.
+- **Find my phone.** `ecoz ring` plays an alarm at full volume, even on silent.
+- **Lock when you walk away.** The phone sends a private Bluetooth beacon; when it is clearly out of range the laptop locks. It never locks while you are typing.
+- **Unlock when you are back.** Only when the phone is close, is itself unlocked, and signs a fresh challenge with a key kept in its secure hardware. A locked phone cannot unlock the laptop.
 
-You need a **Linux laptop running GNOME** and an **Android 10+ phone**, on the same Wi-Fi or the phone's hotspot.
+Lock and unlock are off until you turn them on.
+
+## How it works
+
+1. **Install** the laptop service (one command) and build the Android app.
+2. **Pair** them once with a code. The phone pins the laptop's certificate from then on.
+3. **Turn on** what you want from the app and from the laptop's settings window.
+
+The laptop runs a small HTTPS service and the phone keeps one connection open to it, so the laptop can push things to the phone at any time. If the laptop's address changes, the phone finds it again by itself.
+
+```text
+Phone (Android app)                                               Laptop (Linux service)
+┌───────────────────────────────┐                                 ┌───────────────────────────────┐
+│ links, clipboard, files,      │       <=== pinned TLS ===>      │ HTTPS service                 │
+│ notifications                 │      over Wi-Fi or hotspot      │ pushes events to the phone    │
+├───────────────────────────────┤                                 ├───────────────────────────────┤
+│ Bluetooth beacon              │     ..... Bluetooth LE ....>    │ presence scanner              │
+│ rotates every 30 s            │                                 │ near / mid / away             │
+├───────────────────────────────┤                                 ├───────────────v───────────────┤
+│ hardware key                  │    ... signed challenge ...>    │ auto-lock and unlock          │
+│ works only if phone unlocked  │                                 │ checks distance + signature   │
+└───────────────────────────────┘                                 └───────────────────────────────┘
+```
+
+## A closer look
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/laptop-reply.png" alt="The reply window on the laptop"></td>
+    <td width="50%"><img src="docs/screenshots/phone-file-prompt.png" alt="The phone asking whether to accept a file from the laptop"></td>
+  </tr>
+  <tr>
+    <td><sub>Replying to a message from the laptop</sub></td>
+    <td><sub>The phone asks before it accepts a file</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/phone-app.png" alt="The Android app" width="300"> <img src="docs/screenshots/phone-settings.png" alt="The rest of the Android app's switches" width="300"></td>
+    <td><img src="docs/screenshots/laptop-settings.png" alt="The settings window on the laptop"></td>
+  </tr>
+  <tr>
+    <td><sub>The Android app</sub></td>
+    <td><sub>Settings on the laptop</sub></td>
+  </tr>
+</table>
+
+<sub>Screenshots use a sample contact and a placeholder address.</sub>
+
+## Requirements
+
+- **Laptop:** Linux with GNOME. Developed on Ubuntu 26.04 (GNOME 50, Wayland). It needs Python 3, PyGObject, `python3-cryptography` (for unlock), OpenSSL, Avahi and BlueZ.
+- **Phone:** Android 10 or newer. Developed on Android 16.
+- **Network:** both on the same Wi-Fi, or the laptop on the phone's hotspot. Bluetooth is only used for lock and unlock.
+
+## Quick start
 
 ### 1. The laptop
 
@@ -58,13 +96,13 @@ cd ecoz
 ./install.sh
 ```
 
-`install.sh` needs no root. It links the `ecoz` command, starts a user service, and adds a settings launcher and the Files right-click entry. Keep the folder where it is.
+`install.sh` needs no root. It links the `ecoz` command, starts a systemd user service, and adds a settings launcher and the *Send to Phone* entry in Files. Keep the folder where it is.
 
-**For the shared clipboard**, install the [GSConnect](https://extensions.gnome.org/extension/1319/gsconnect/) GNOME extension and enable it. ecoz borrows only its clipboard bridge, so you do **not** have to pair anything with KDE Connect. On GNOME 50 use **v74 or newer**: older versions hang on it. Without GSConnect everything else still works.
+**For the shared clipboard**, install the [GSConnect](https://extensions.gnome.org/extension/1319/gsconnect/) GNOME extension and enable it. ecoz only uses its clipboard bridge, so nothing needs to be paired with KDE Connect. On GNOME 50 use **v74 or newer**; older versions hang on it. Without GSConnect, everything else still works.
 
 ### 2. The phone
 
-You'll need JDK 17+ and the Android SDK (platform 37) to build, and USB debugging on to install.
+Building needs JDK 17 or newer and the Android SDK (platform 37). Turn on USB debugging to install.
 
 ```bash
 cd android
@@ -78,133 +116,108 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ecoz pair
 ```
 
-It prints a code that starts with `ecoz://`. Get it onto the phone's clipboard any way you like (message it to yourself, a notes app, anything), then open the **ecoz** app → **Paste** → **Pair** → **Test connection**.
+This prints a code that starts with `ecoz://`. Get it onto the phone's clipboard any way you like (message it to yourself, for example), then open the app and tap **Paste**, **Pair**, and **Test connection**.
 
-> 🔐 The pairing code contains your secret. Don't post it anywhere public.
+The code contains a secret. Do not post it anywhere public.
 
-### 4. Switch on what you want
+### 4. Turn things on
 
-In the app, turn on **Receive from laptop** (links, clipboard, files, ring) and, if you like, **Mirror notifications**, **Tell the laptop when I'm close** and **Let my phone unlock the laptop**. On the laptop open **ecoz** from your app grid (or run `ecoz settings`) for the laptop-side switches.
+In the app, switch on **Receive from laptop**, and then whichever of **Mirror notifications**, **Tell the laptop when I'm close** and **Let my phone unlock the laptop** you want. On the laptop, open **ecoz** from the app grid (or run `ecoz settings`).
 
-**Try it:** share a link from Chrome → *Send to laptop*. Copy some text on the laptop and paste it on the phone. Run `ecoz ring`.
+Try it: share a link from Chrome to *Send to laptop*, copy some text on the laptop and paste it on the phone, or run `ecoz ring`.
 
----
-
-## 🧰 Commands
+## Commands
 
 | Command | What it does |
 |---|---|
 | `ecoz send <link or text>` | Push it to the phone. With no argument, sends your clipboard. |
-| `ecoz send-file a.jpg b.pdf` | Offer files to the phone (it asks first, unless you turned that off there). |
-| `ecoz ring` &nbsp;/&nbsp; `ecoz ring stop` | Find my phone. |
-| `ecoz settings` | Settings window: ask-before-accepting, clipboard sharing, auto-lock, unlock. |
-| `ecoz confirm [on\|off]` | Ask before accepting files from the phone (default **on**). |
-| `ecoz sync [on\|off]` | Clipboard sharing with the phone. |
-| `ecoz proximity [on\|off]` · `ecoz presence` | Listen for the phone's beacon · show **NEAR / MID / AWAY** and the signal strength. |
-| `ecoz autolock [on\|off]` | Lock the laptop when the phone walks away (default **off**). |
-| `ecoz unlock [on\|off\|forget\|status]` | Unlock from the phone (default **off**). |
+| `ecoz send-file a.jpg b.pdf` | Offer files to the phone. It asks first, unless you turned that off there. |
+| `ecoz ring` / `ecoz ring stop` | Find my phone. |
+| `ecoz settings` | The settings window. |
+| `ecoz confirm [on\|off]` | Ask before accepting files from the phone (default on). |
+| `ecoz sync [on\|off]` | Share the clipboard with the phone. |
+| `ecoz proximity [on\|off]`, `ecoz presence` | Listen for the phone's beacon, and show *near*, *mid* or *away* with the signal strength. |
+| `ecoz autolock [on\|off]` | Lock when the phone walks away (default off). |
+| `ecoz unlock [on\|off\|forget\|status]` | Unlock from the phone (default off). |
 | `ecoz pair` | Print the pairing code. |
 
----
+## Security and privacy
 
-## 🔧 How it works
+- **Encryption and identity.** Every connection is TLS. The phone pins the laptop's certificate fingerprint when you pair, and the laptop checks a secret token, so a stranger on your Wi-Fi cannot talk to either side.
+- **Nothing leaves your network.** No server, no account, no analytics. The phone app only talks to your laptop.
+- **Files.** Both directions ask first, before any data moves. Names are reduced to a plain file name, files are written under a temporary name and renamed when complete, and an upload must match what was approved.
+- **The beacon.** A tag only your laptop can recognise, changing every 30 seconds, carrying no name or location.
+- **Unlock.** It needs the phone near, the phone unlocked, a fresh signed challenge (single use, tied to your laptop, valid for 15 seconds) and someone touching the laptop. The key is created in the phone's secure hardware and cannot be copied out. Registering a phone needs an **Accept** on the unlocked laptop.
 
-<p align="center">
-  <img src="docs/architecture.svg" alt="How ecoz works: the phone app and the laptop service talk over pinned TLS on your Wi-Fi or hotspot; a Bluetooth beacon tells the laptop the phone is close; a hardware key on the phone signs unlock challenges." width="100%">
-</p>
+Unlock does lower your laptop's protection, so know the limits:
 
-- The laptop runs a small **HTTPS service**. The phone keeps one connection open to it, so the laptop can push links, clipboard changes, files and unlock challenges to the phone at any time.
-- The phone **finds the laptop again by itself** through mDNS if its address changes.
-- **No cloud in the middle.** The two ends talk directly: the phone pins the laptop's certificate, and the laptop checks a secret token.
-- Written in plain Python (standard library plus PyGObject, and `cryptography` for unlock) and Kotlin, with no heavy frameworks.
+- Someone who can relay your phone's Bluetooth beacon *and* get your unlocked phone to answer could unlock it.
+- Anyone who touches the laptop while you stand next to it with an unlocked phone will find it unlocked. Apple's Auto Unlock with a watch works the same way.
+- A phone in your pocket is normally locked, so unlock only works while the phone is unlocked. Android's *Extend Unlock* keeps it unlocked while you carry it.
 
----
+The exact rules are in [`daemon/ecoz_unlock.py`](daemon/ecoz_unlock.py).
 
-## 🔐 Security and privacy
+## How it compares
 
-| | |
-|---|---|
-| **Encryption and identity** | Every connection is TLS. The phone **pins** the laptop's certificate fingerprint at pairing, and the laptop checks a secret token. A stranger on your Wi-Fi cannot talk to it. |
-| **Nothing leaves your network** | No server, no account, no analytics. The phone app only talks to your laptop. |
-| **Files** | Both directions ask first, **before any data moves**. Names are reduced to a plain base name, files are written under a temporary name and renamed when complete, and an approved upload must match what was approved. |
-| **The beacon** | A tag that only your laptop can recognise, **rotating every 30 seconds**, with no name or location. It can't be used to track you. |
-| **Unlock** | Needs the phone near **and** unlocked **and** a fresh signed challenge (single use, bound to your laptop, expires in 15 s) **and** someone touching the laptop. The key is created in the phone's secure hardware and can't be copied out. Registering a phone requires an **Accept** on the unlocked laptop. |
-
-**Know the limits.** Unlock lowers your laptop's protection:
-
-- Someone who can **relay** your phone's Bluetooth beacon *and* get your unlocked phone to answer could unlock it.
-- Anyone who touches the laptop while you stand next to it with an unlocked phone will find it unlocked. (Apple's Auto Unlock with a watch works the same way.)
-- A phone in your pocket is normally locked, so it only works while the phone is unlocked. Android's **Extend Unlock** keeps it unlocked while you carry it.
-
-Lock and unlock are **off by default**. See [`daemon/ecoz_unlock.py`](daemon/ecoz_unlock.py) for the exact rules.
-
----
-
-## ⚖️ How it compares
-
-ecoz is **not** a replacement for the mature tools. It aims at a different goal: the *Apple Continuity feel* between **one** phone and **one** laptop.
+ecoz does not replace the mature tools. It aims at one thing: the feel of Apple's Continuity between **one** phone and **one** laptop.
 
 | | ecoz | [KDE Connect](https://kdeconnect.kde.org/) / GSConnect | [LocalSend](https://localsend.org/) |
 |---|---|---|---|
-| Goal | One phone ↔ one laptop, seamless | Many devices, many plugins | Send files to anyone nearby |
-| Lock when the phone walks away, unlock when it's back | ✅ | – | – |
-| Ask before accepting files, a separate setting per device | ✅ | – | – |
-| Notification replies | ✅ | ✅ | – |
-| SMS / calls, media control, remote input | ❌ not yet | ✅ | – |
-| Other desktops (KDE, Windows, macOS) | ❌ GNOME only for now | ✅ | ✅ |
-| Maturity | 🌱 early | 🌳 many years | 🌳 many years |
+| Aim | One phone and one laptop, seamless | Many devices, many plugins | Send files to anyone nearby |
+| Lock and unlock with the phone | yes | not that I know of | no |
+| Ask before accepting files, per device | yes | not that I know of | no |
+| Notification replies | yes | yes | no |
+| SMS and calls, media control, remote input | not yet | yes | no |
+| Other desktops (KDE, Windows, macOS) | GNOME only for now | yes | yes |
+| Maturity | early | many years | many years |
 
-<sub>"–" means not a feature I'm aware of. Corrections welcome.</sub>
+If you want a proven toolbox, use KDE Connect. If you want the unlock and the one-machine feel, try ecoz.
 
-If you want a battle-tested toolbox, use KDE Connect. If you want the unlock and the "it just feels like one device" parts, try ecoz.
+## Limitations
 
----
+- **GNOME only for now.** The clipboard bridge, locking and idle detection use GNOME. Links, files, notifications and find-my-phone should not depend on it, but I have only tested on GNOME.
+- **You build the phone app yourself.** There is no Play Store or F-Droid release yet.
+- **Pairing is manual.** There is no QR code yet.
+- **Phone to laptop clipboard needs one tap.** Android stops background apps from reading the clipboard. I tried the known workarounds on an Android 16 phone and they do not work there.
+- **No SMS yet.** RCS chats cannot be read from the phone by any app, though you can already reply to their notifications.
+- **Folders cannot be sent yet,** only files.
+- Tested on **one** setup.
 
-## 🚧 Limitations
+## Roadmap
 
-- **GNOME only for now.** The clipboard bridge, locking and idle detection use GNOME. (Links, files, notifications and find-my-phone don't depend on it, but I've only tested on GNOME.)
-- **The phone app is a debug build you compile yourself.** No Play Store or F-Droid release yet.
-- **Pairing is manual:** there's no QR code yet.
-- **Phone → laptop clipboard needs one tap.** Android stops background apps from reading the clipboard, so it can't be fully automatic. I tried the known workarounds on an Android 16 phone and they don't work there.
-- **No SMS yet**, and RCS chats can't be read from the phone by any app, though you can already **reply to their notifications**.
-- **Folders can't be sent yet**, only files.
-- Tested on **one** setup. Expect rough edges elsewhere.
-
----
-
-## 🗺️ Roadmap
-
-- [x] Links · clipboard · notifications with replies · find my phone
-- [x] File transfer in both directions, with ask-first on each device
-- [x] Auto-lock · unlock with a hardware-backed key
-- [ ] **One-tap "turn on hotspot" when the laptop is near and offline**
-- [ ] **QR-code pairing**
+- [x] Links, clipboard, notifications with replies, find my phone
+- [x] File transfer both ways, asking first on each device
+- [x] Auto-lock and unlock with a hardware-backed key
+- [ ] One-tap "turn on hotspot" when the laptop is near and offline
+- [ ] QR-code pairing
 - [ ] SMS in a laptop window
-- [ ] Send folders (zip on the fly)
-- [ ] Packaged releases: signed APK, F-Droid, `.deb`
-- [ ] KDE Plasma and other desktops · X11
-- [ ] Browser-tab hand-off · several phones · media controls
+- [ ] Send folders
+- [ ] Release builds: signed APK, F-Droid, `.deb`
+- [ ] KDE Plasma and other desktops, X11
+- [ ] Browser-tab hand-off, several phones, media controls
 
-Got an idea? [Open an issue](https://github.com/dakshhpanchal/ecoz/issues).
+Have an idea? [Open an issue](https://github.com/dakshhpanchal/ecoz/issues).
 
----
-
-## ❓ FAQ
+## FAQ
 
 <details><summary><b>Does it need root?</b></summary>
+
 No, neither on the laptop nor on the phone.
 </details>
 
 <details><summary><b>Does it work over the internet?</b></summary>
-No, by design. Both devices must be on the same Wi-Fi, or the laptop on the phone's hotspot. It's also faster that way (about 50 MB/s on 5 GHz).
+
+No, by design. Both devices must be on the same Wi-Fi, or the laptop on the phone's hotspot. That also keeps it fast.
 </details>
 
-<details><summary><b>Why is transfer slow for me?</b></summary>
-Check the band. On a 2.4 GHz hotspot I measured about 7 MB/s, and about 50 MB/s on 5 GHz. Switch the phone's hotspot to 5 GHz.
+<details><summary><b>Transfers are slow.</b></summary>
+
+Check the Wi-Fi band. On a 2.4 GHz hotspot I measured about 7 MB/s and on 5 GHz about 50 MB/s. Set the phone's hotspot to 5 GHz.
 </details>
 
-<details><summary><b>The notification on my phone says "Connecting…" forever.</b></summary>
-Check the laptop service: <code>systemctl --user status ecoz</code>. Make sure the phone is on the same network, and set the app's battery setting to <b>Unrestricted</b> so Android doesn't kill the connection.
+<details><summary><b>The phone notification says "Connecting" and never connects.</b></summary>
+
+Check the laptop service with `systemctl --user status ecoz`, make sure both are on the same network, and set the app's battery setting to *Unrestricted* so Android does not kill the connection.
 </details>
 
 <details><summary><b>How do I uninstall it?</b></summary>
@@ -215,37 +228,28 @@ rm ~/.local/bin/ecoz ~/.config/systemd/user/ecoz.service \
    ~/.local/share/applications/ecoz.desktop "$HOME/.local/share/nautilus/scripts/Send to Phone"
 rm -r ~/.config/ecoz        # your certificate, token and settings
 ```
+
 Then uninstall the app from the phone.
 </details>
 
----
+## Contributing
 
-## 🤝 Contributing
-
-Pull requests, bug reports and ideas are very welcome. Good first things to pick up: **QR pairing**, **KDE Plasma support**, **packaging**, and **tests**.
+Bug reports, ideas and pull requests are welcome. Good first things to pick up: QR pairing, KDE Plasma support, packaging, and tests.
 
 ```text
-daemon/        laptop side (Python): ecoz_daemon.py is the service and CLI;
-               ecoz_presence / ecoz_lock / ecoz_unlock handle proximity;
-               ecoz_reply / ecoz_settings are the GTK 4 + libadwaita windows
-android/       phone app (Kotlin, Jetpack Compose, Material 3)
-integrations/  Files right-click script and the app-grid launcher
+daemon/        the laptop side (Python). ecoz_daemon.py is the service and the CLI;
+               ecoz_presence, ecoz_lock and ecoz_unlock handle proximity;
+               ecoz_reply and ecoz_settings are the GTK 4 and libadwaita windows
+android/       the phone app (Kotlin, Jetpack Compose, Material 3)
+integrations/  the Files right-click script and the app-grid launcher
 ```
 
-Run the service from source with `python3 -I daemon/ecoz_daemon.py serve`. When you open a PR, please test the part you changed on a real device. Most bugs here only show up on real hardware.
+Run the service from source with `python3 -I daemon/ecoz_daemon.py serve`. If you open a pull request, please try the part you changed on a real device, since most bugs here only show up on real hardware.
 
----
+## License
 
-## 🙏 Thanks
+[MIT](LICENSE) © 2026 Daksh Panchal
 
-- [GSConnect](https://github.com/GSConnect/gnome-shell-extension-gsconnect) / KDE Connect, whose clipboard bridge ecoz uses on GNOME, and which showed what a phone-and-laptop link can be.
-- [LocalSend](https://localsend.org/), for the standard of how simple local file sharing should feel.
+## Thanks
 
-## 📄 License
-
-[MIT](LICENSE) © 2026 Daksh Panchal. Use it, change it, share it.
-
-<p align="center">
-  <br>
-  If ecoz makes your phone and laptop feel like one device, a ⭐ helps other people find it.
-</p>
+[GSConnect](https://github.com/GSConnect/gnome-shell-extension-gsconnect) and KDE Connect, whose clipboard bridge ecoz uses on GNOME and which showed what a phone and laptop link can be. [LocalSend](https://localsend.org/), for the standard of how simple local file sharing should feel.
