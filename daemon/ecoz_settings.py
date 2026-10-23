@@ -33,9 +33,25 @@ class FlagSwitch(Adw.SwitchRow):
             self._flag.touch()
 
 
+class PositiveFlagSwitch(Adw.SwitchRow):
+    """A switch backed by a flag file that exists when the setting is ON (the opposite of FlagSwitch)."""
+
+    def __init__(self, title, subtitle, flag):
+        super().__init__(title=title, subtitle=subtitle, active=flag.exists())
+        self._flag = flag
+        self.connect("notify::active", self._changed)
+
+    def _changed(self, *_):
+        CONF.mkdir(parents=True, exist_ok=True)
+        if self.get_active():
+            self._flag.touch()
+        else:
+            self._flag.unlink(missing_ok=True)
+
+
 class SettingsWindow(Adw.ApplicationWindow):
     def __init__(self, app):
-        super().__init__(application=app, title="ecoz", default_width=520, default_height=460)
+        super().__init__(application=app, title="ecoz", default_width=520, default_height=560)
 
         files = Adw.PreferencesGroup(title="Files from the phone")
         files.add(FlagSwitch(
@@ -54,9 +70,17 @@ class SettingsWindow(Adw.ApplicationWindow):
             "Text you copy on the laptop appears on the phone's clipboard. Password-manager copies are never sent.",
             CONF / "clipboard-sync-off"))
 
+        proximity = Adw.PreferencesGroup(title="Phone proximity")
+        proximity.add(PositiveFlagSwitch(
+            "Lock when my phone walks away",
+            "Locks the screen about 12 seconds after your phone is clearly out of range, and never while you are "
+            "using the laptop. Needs “Tell the laptop when I'm close” turned on in the phone app.",
+            CONF / "autolock-on"))
+
         page = Adw.PreferencesPage()
         page.add(files)
         page.add(clipboard)
+        page.add(proximity)
         view = Adw.ToolbarView()
         view.add_top_bar(Adw.HeaderBar())
         view.set_content(page)

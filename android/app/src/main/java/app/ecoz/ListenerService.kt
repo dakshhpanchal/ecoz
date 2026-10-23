@@ -42,6 +42,8 @@ class ListenerService : Service() {
     private val seen = LinkedHashSet<String>() // event ids already shown (the laptop may re-send)
     private var job: Job? = null
     private var ringStopJob: Job? = null
+    private var beaconJob: Job? = null
+    private lateinit var beacon: Beacon
     private lateinit var notifications: NotificationManager
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -67,10 +69,21 @@ class ListenerService : Service() {
         // If "Receive from laptop" is off, this service exists only for a transfer: stop when it ends.
         Transfers.onIdle = { if (!store.listenEnabled) stopSelf() }
         if (job == null && store.listenEnabled) job = scope.launch { connectLoop() }
+        if (beaconJob == null) {
+            beacon = Beacon(applicationContext)
+            beaconJob = scope.launch {
+                // Follows the switch in the app, and rotates the beacon's tag every 30 seconds.
+                while (isActive) {
+                    beacon.sync(store.proximityEnabled && store.listenEnabled, store.load()?.token)
+                    delay(BEACON_TICK_MS)
+                }
+            }
+        }
         return START_STICKY
     }
 
     override fun onDestroy() {
+        if (::beacon.isInitialized) beacon.stop()
         RingController.stop(this)
         handle.close() // unblocks the read so the loop can exit
         scope.cancel()
@@ -331,6 +344,7 @@ class ListenerService : Service() {
         private const val EXTRA_OFFER = "offer"
         private const val EXTRA_NOTICE = "notice"
         private const val FILE_OFFER_BASE = 5000
+        private const val BEACON_TICK_MS = 5_000L
         private const val FILE_OFFER_PROMPT_MS = 10 * 60_000L
         private const val ACTION_STOP_RING = "app.ecoz.STOP_RING"
         private const val RING_ID = 2

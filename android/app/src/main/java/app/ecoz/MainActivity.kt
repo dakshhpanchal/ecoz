@@ -111,6 +111,12 @@ private fun EcozScreen(store: Store, resumeTick: Int) {
     var clipboardSync by remember { mutableStateOf(store.clipboardSync) }
     var mirror by remember { mutableStateOf(store.mirrorNotifications) }
     var confirmFiles by remember { mutableStateOf(store.confirmIncomingFiles) }
+    var proximity by remember { mutableStateOf(store.proximityEnabled) }
+    val nearbyPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        val ok = granted[Manifest.permission.BLUETOOTH_ADVERTISE] == true
+        proximity = ok
+        store.proximityEnabled = ok
+    }
     val notificationAccess = remember(resumeTick) {
         NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
     }
@@ -218,6 +224,33 @@ private fun EcozScreen(store: Store, resumeTick: Int) {
                         Text(
                             "To send what you copied here to the laptop, tap “Send clipboard” in the ecoz " +
                                 "notification. Android doesn't let apps watch the clipboard in the background.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Tell the laptop when I'm close", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    if (proximity) "Broadcasting a private Bluetooth beacon" else "Off",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                            }
+                            Switch(checked = proximity, onCheckedChange = { on ->
+                                if (on) nearbyPermission.launch(
+                                    arrayOf(Manifest.permission.BLUETOOTH_ADVERTISE, Manifest.permission.BLUETOOTH_SCAN)
+                                ) else {
+                                    proximity = false
+                                    store.proximityEnabled = false
+                                }
+                            })
+                        }
+                        Text(
+                            "Used for locking the laptop when you walk away. The beacon is recognisable only by " +
+                                "your laptop, changes every 30 seconds, and carries no name or location. " +
+                                "It's also switched on separately on the laptop: run  ecoz proximity on .",
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }

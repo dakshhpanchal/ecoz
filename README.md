@@ -57,6 +57,21 @@ temporary name and renamed when complete, names are reduced to a plain base name
 "(1)"), and only a process on the laptop itself can offer a file to the phone. Folders aren't
 supported yet.
 
+## Phone proximity
+
+The phone can broadcast a Bluetooth beacon that only your laptop recognises (a tag derived from
+the pairing token, rotating every 30 seconds, no name or location). Turn it on in the app
+("Tell the laptop when I'm close") and on the laptop:
+
+    ecoz proximity on      # listen for the beacon
+    ecoz presence          # Phone is NEAR  (-50 dBm, last heard 0.2s ago)
+    ecoz autolock on       # lock the laptop when the phone walks away (also in `ecoz settings`)
+
+Auto-lock arms only after it has seen the phone near, locks after the signal has been clearly
+weak (below -82 dBm) for 12 seconds, never while you are using the machine (idle under 10 s), and
+re-arms only once the phone has been near again, so a dead phone or a hand-unlocked session is
+never locked out from under you. All of this is off by default.
+
 Phone notifications are mirrored to the laptop when "Mirror notifications" is on and
 notification access is granted (Settings, or `adb shell cmd notification allow_listener
 app.ecoz/app.ecoz.NotificationMirrorService`). Ongoing, silent and private notifications are

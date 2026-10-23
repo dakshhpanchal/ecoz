@@ -51,6 +51,11 @@ class Store(context: Context) {
         get() = prefs.getBoolean("listen", false)
         set(value) = prefs.edit().putBoolean("listen", value).apply()
 
+    /** Broadcast the proximity beacon (for lock/unlock and hotspot help). Off until the user turns it on. */
+    var proximityEnabled: Boolean
+        get() = prefs.getBoolean("proximity", false)
+        set(value) = prefs.edit().putBoolean("proximity", value).apply()
+
     /** Ask before accepting files the laptop sends. Each device decides this for itself. */
     var confirmIncomingFiles: Boolean
         get() = prefs.getBoolean("confirm_incoming_files", true)

@@ -12,6 +12,9 @@ Receives links/text from the phone over HTTPS on the LAN and opens them here.
   ecoz_daemon.py send-file <path>... send files to the phone (it asks first, unless you turned that off there)
   ecoz_daemon.py confirm [on|off]   ask before accepting files from the phone (default on)
   ecoz_daemon.py settings           open the settings window
+  ecoz_daemon.py proximity [on|off] listen for the phone's Bluetooth beacon (needed for lock/unlock; default off)
+  ecoz_daemon.py presence           show whether the phone is near, with the signal strength
+  ecoz_daemon.py autolock [on|off]  lock the laptop when the phone walks away (default off)
   ecoz_daemon.py ring [stop]        make the phone ring (find my phone)
   ecoz_daemon.py notif-action <key> <index> [text]
                                     press a button on a phone notification (text = reply)
@@ -138,6 +141,20 @@ CONFIRM_OFF_FLAG = CONF / "confirm-incoming-off"   # file present = accept files
 
 def confirm_incoming():
     return not CONFIRM_OFF_FLAG.exists()
+
+
+PROXIMITY_ON_FLAG = CONF / "proximity-on"   # file present = listen for the phone's beacon (off by default)
+AUTOLOCK_ON_FLAG = CONF / "autolock-on"       # file present = lock when the phone walks away (off by default)
+PRESENCE = None                              # the running ecoz_presence.Presence, while enabled
+
+
+def autolock_enabled():
+    return AUTOLOCK_ON_FLAG.exists()
+
+
+def proximity_enabled():
+    # anything that needs to know where the phone is also needs the beacon listener
+    return PROXIMITY_ON_FLAG.exists() or autolock_enabled()
 
 
 def clip_sync_enabled():
@@ -875,10 +892,15 @@ class Handler(BaseHTTPRequestHandler):
             if not self._authed():
                 return self._json(401, {"ok": False})
             return self._send_file(self.path[len("/v1/file/"):])
-        if self.path not in ("/v1/ping", "/v1/events"):
+        if self.path not in ("/v1/ping", "/v1/events", "/v1/presence"):
             return self._json(404, {"ok": False})
         if not self._authed():
             return self._json(401, {"ok": False})
+        if self.path == "/v1/presence":
+            if not self._is_local():  # where the phone is, is nobody else's business
+                return self._json(403, {"ok": False, "error": "local only"})
+            return self._json(200, {"ok": True, "enabled": PRESENCE is not None,
+                                    **(PRESENCE.snapshot() if PRESENCE else {})})
         if self.path == "/v1/events":
             return self._stream_events()
         self._json(200, {"ok": True, "name": socket.gethostname()})
@@ -1012,6 +1034,41 @@ def publish_mdns():
         return None
 
 
+def autolock_loop():
+    """Once a second, let ecoz_lock decide whether the phone has walked away."""
+    import ecoz_lock
+    guard = ecoz_lock.AutoLock(
+        presence=lambda: PRESENCE.snapshot() if PRESENCE else None,
+        is_locked=ecoz_lock.screen_is_locked, idle_seconds=ecoz_lock.idle_seconds, lock=ecoz_lock.lock_screen,
+        log=lambda msg: print(f"autolock: {msg}", file=sys.stderr, flush=True))
+    while True:
+        if autolock_enabled():
+            try:
+                guard.tick()
+            except Exception as e:  # never let a hiccup kill the loop
+                print(f"autolock error: {e}", file=sys.stderr, flush=True)
+        else:
+            guard.armed = False
+        time.sleep(1)
+
+
+def presence_supervisor(token):
+    """Start or stop Bluetooth scanning as the user switches proximity on and off."""
+    global PRESENCE
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import ecoz_presence
+    threading.Thread(target=autolock_loop, daemon=True, name="autolock").start()
+    while True:
+        wanted = proximity_enabled()
+        if wanted and PRESENCE is None:
+            PRESENCE = ecoz_presence.Presence(token)
+            PRESENCE.start()
+        elif not wanted and PRESENCE is not None:
+            PRESENCE.stop()
+            PRESENCE = None
+        time.sleep(5)
+
+
 def serve():
     token = ensure_identity()
     Handler.token = token
@@ -1025,6 +1082,7 @@ def serve():
     threading.Thread(target=reaper, daemon=True).start()
     watch_clipboard()
     watch_notification_actions()
+    threading.Thread(target=presence_supervisor, args=(token,), daemon=True, name="presence-supervisor").start()
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(CERT, KEY)
@@ -1080,6 +1138,46 @@ def flag_setting(label, flag, args, usage):
     elif args:
         sys.exit(f"usage: {usage} [on|off]")
     report(f"{label} is {'off' if flag.exists() else 'on'}.")
+
+
+def proximity_setting(args):
+    CONF.mkdir(parents=True, exist_ok=True)
+    if args and args[0] == "on":
+        PROXIMITY_ON_FLAG.touch()
+    elif args and args[0] == "off":
+        PROXIMITY_ON_FLAG.unlink(missing_ok=True)
+    elif args:
+        sys.exit("usage: ecoz_daemon.py proximity [on|off]")
+    report(f"Listening for the phone's Bluetooth beacon is {'on' if proximity_enabled() else 'off'}.")
+
+
+def autolock_setting(args):
+    CONF.mkdir(parents=True, exist_ok=True)
+    if args and args[0] == "on":
+        AUTOLOCK_ON_FLAG.touch()
+    elif args and args[0] == "off":
+        AUTOLOCK_ON_FLAG.unlink(missing_ok=True)
+    elif args:
+        sys.exit("usage: ecoz_daemon.py autolock [on|off]")
+    report(f"Locking when the phone walks away is {'on' if autolock_enabled() else 'off'}.")
+
+
+def show_presence():
+    ctx = ssl.create_default_context(cafile=str(CERT))
+    ctx.check_hostname = False
+    conn = http.client.HTTPSConnection("127.0.0.1", PORT, context=ctx, timeout=5)
+    try:
+        conn.request("GET", "/v1/presence", headers={"Authorization": f"Bearer {ensure_identity()}"})
+        info = json.loads(conn.getresponse().read() or b"{}")
+    except OSError as e:
+        report(f"service not reachable ({e}); is ecoz.service running?", failed=True)
+    if not info.get("enabled"):
+        return report("Not listening. Turn it on with: ecoz proximity on")
+    if info.get("error"):
+        return report(f"Bluetooth problem: {info['error']}", failed=True)
+    rssi = f"{info['rssi']:.0f} dBm" if info.get("rssi") is not None else "no recent signal"
+    heard = "never heard" if info.get("seen_seconds_ago") is None else f"last heard {info['seen_seconds_ago']}s ago"
+    report(f"Phone is {info['state'].upper()}  ({rssi}, {heard})")
 
 
 def sync_setting(args):
@@ -1193,6 +1291,12 @@ def main():
         sync_setting(sys.argv[2:])
     elif cmd == "confirm":
         confirm_setting(sys.argv[2:])
+    elif cmd == "proximity":
+        proximity_setting(sys.argv[2:])
+    elif cmd == "presence":
+        show_presence()
+    elif cmd == "autolock":
+        autolock_setting(sys.argv[2:])
     elif cmd == "settings":
         open_settings()
     elif cmd == "pair":
