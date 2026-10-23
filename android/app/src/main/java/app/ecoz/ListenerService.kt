@@ -53,11 +53,13 @@ class ListenerService : Service() {
             ACTION_STOP_RING -> stopRinging()
             ACTION_ACCEPT_FILES, ACTION_DECLINE_FILES -> answerFileOffer(intent!!)
         }
+        val store = Store(applicationContext)
+        // Every start command re-posts the foreground notification, so it must show the real state,
+        // not a fixed "Connecting…" that would stay stuck while the connection is actually up.
         ServiceCompat.startForeground(
-            this, FOREGROUND_ID, foregroundNotification("Connecting…"),
+            this, FOREGROUND_ID, foregroundNotification(currentStatusText(store)),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
         )
-        val store = Store(applicationContext)
         if (intent?.action == ACTION_UPLOAD) {
             val uris = (0 until (intent.clipData?.itemCount ?: 0)).mapNotNull { intent.clipData?.getItemAt(it)?.uri }
             Transfers.upload(applicationContext, scope, store, uris)
@@ -273,6 +275,12 @@ class ListenerService : Service() {
             .setTimeoutAfter(TEXT_NOTICE_MS)
             .build()
         notifications.notify(id.hashCode(), notification)
+    }
+
+    private fun currentStatusText(store: Store): String {
+        if (!store.listenEnabled) return "Transferring files…" // no connection loop: started only for a transfer
+        val known = ListenerState.status.value
+        return if (known == "Off") "Connecting…" else known
     }
 
     private fun setStatus(text: String) {
