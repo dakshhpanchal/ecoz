@@ -109,24 +109,9 @@ In the app, turn on **Receive from laptop** (links, clipboard, files, ring) and,
 
 ## 🔧 How it works
 
-```mermaid
-flowchart LR
-  subgraph Phone["📱 Android app (Kotlin, Compose, Material 3)"]
-    direction TB
-    A["Share sheet · notifications<br/>clipboard · files"]
-    B["Bluetooth beacon<br/>(rotating, signed)"]
-    K[("Key in secure hardware<br/>usable only while unlocked")]
-  end
-  subgraph Laptop["💻 Linux service (Python)"]
-    direction TB
-    S["HTTPS server + event stream"]
-    P["Presence scanner (BlueZ)"]
-    L["Auto-lock · Unlock"]
-  end
-  A <==>|"pinned TLS over your Wi-Fi or hotspot"| S
-  B -. "Bluetooth LE" .-> P --> L
-  K -. "signs the unlock challenge" .-> S
-```
+<p align="center">
+  <img src="docs/architecture.svg" alt="How ecoz works: the phone app and the laptop service talk over pinned TLS on your Wi-Fi or hotspot; a Bluetooth beacon tells the laptop the phone is close; a hardware key on the phone signs unlock challenges." width="100%">
+</p>
 
 - The laptop runs a small **HTTPS service**. The phone keeps one connection open to it, so the laptop can push links, clipboard changes, files and unlock challenges to the phone at any time.
 - The phone **finds the laptop again by itself** through mDNS if its address changes.
