@@ -130,7 +130,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ecoz pair
 ```
 
-This prints a code that starts with `ecoz://`. Get it onto the phone's clipboard any way you like (message it to yourself, for example), then open the app and tap **Paste**, **Pair**, and **Test connection**.
+A window shows a QR code. In the app tap **Scan QR code** and point the camera at it, then tap **Test connection**. The terminal also prints the code, which you can paste into the app instead if the camera isn't an option.
 
 The code contains a secret. Do not post it anywhere public.
 
@@ -155,7 +155,7 @@ Try it: share a link from Chrome to *Send to laptop*, copy some text on the lapt
 | `ecoz proximity [on\|off]`, `ecoz presence` | Listen for the phone's beacon, and show *near*, *mid* or *away* with the signal strength. |
 | `ecoz autolock [on\|off]` | Lock when the phone walks away (default off). |
 | `ecoz unlock [on\|off\|forget\|status]` | Unlock from the phone (default off). |
-| `ecoz pair` | Print the pairing code. |
+| `ecoz pair` | Show a QR code for the phone to scan (the code is also printed, to paste instead). |
 
 ## Security and privacy
 
@@ -194,7 +194,6 @@ If you want a proven toolbox, use KDE Connect. If you want the unlock and the on
 
 - **GNOME only for now.** The clipboard bridge, locking and idle detection use GNOME. Links, files, notifications and find-my-phone should not depend on it, but I have only tested on GNOME.
 - **You build the phone app yourself.** There is no Play Store or F-Droid release yet.
-- **Pairing is manual.** There is no QR code yet.
 - **Phone to laptop clipboard needs one tap.** Android stops background apps from reading the clipboard. I tried the known workarounds on an Android 16 phone and they do not work there.
 - **Texts are plain SMS only.** RCS chats ("Chat features") cannot be read by any app, though you can reply to their notifications. Texts you send from the laptop do not show up in the Messages app, because only the default messaging app may write there. Bank and login codes will be visible on the laptop, so leave this off on a shared computer.
 - **The hotspot is one tap, not zero.** Android does not let apps switch it on, so the phone shows a notification that opens the switch.
@@ -207,7 +206,7 @@ If you want a proven toolbox, use KDE Connect. If you want the unlock and the on
 - [x] File transfer both ways, asking first on each device
 - [x] Auto-lock and unlock with a hardware-backed key
 - [x] One-tap hotspot when the laptop is near and offline
-- [ ] QR-code pairing
+- [x] QR-code pairing
 - [x] SMS in a laptop window, and a Quick Settings tile to switch ecoz on and off
 - [ ] Send folders
 - [ ] Release builds: signed APK, F-Droid, `.deb`
@@ -252,7 +251,7 @@ Then uninstall the app from the phone.
 
 ## Contributing
 
-Bug reports, ideas and pull requests are welcome. Good first things to pick up: QR pairing, KDE Plasma support, packaging, and tests.
+Bug reports, ideas and pull requests are welcome. Good first things to pick up: folder sending, KDE Plasma support, packaging, and tests.
 
 ```text
 daemon/        the laptop side (Python). ecoz_daemon.py is the service and the CLI;

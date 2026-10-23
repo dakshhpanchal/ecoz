@@ -94,5 +94,6 @@ class Store(context: Context) {
         .putString("name", p.name)
         .apply()
 
-    fun clear() = prefs.edit().clear().apply()
+    /** Forgets the laptop. The user's switches (notifications, proximity, texts...) are preferences and stay. */
+    fun clear() = prefs.edit().remove("host").remove("port").remove("token").remove("fingerprint").remove("name").apply()
 }

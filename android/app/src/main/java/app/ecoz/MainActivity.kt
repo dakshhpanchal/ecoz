@@ -14,6 +14,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.ui.Alignment
@@ -103,6 +106,11 @@ private fun EcozScreen(store: Store, resumeTick: Int) {
 
     var receiving by remember { mutableStateOf(store.listenEnabled) }
     val listenerStatus by ListenerState.status.collectAsState()
+    // Unpairing stops the connection but keeps the user's switches, so pairing again carries on as before.
+    fun resumeAfterPairing() {
+        receiving = store.listenEnabled
+        if (receiving) ListenerService.start(context)
+    }
     fun setReceiving(on: Boolean) {
         receiving = on
         store.listenEnabled = on
@@ -157,6 +165,28 @@ private fun EcozScreen(store: Store, resumeTick: Int) {
                     code = code,
                     onCodeChange = { code = it },
                     onPaste = { code = readClipboard(context).orEmpty() },
+                    onScan = {
+                        // Google's scanner runs in its own window: no camera permission needed here.
+                        val scanner = GmsBarcodeScanning.getClient(
+                            context,
+                            GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build(),
+                        )
+                        scanner.startScan()
+                            .addOnSuccessListener { barcode ->
+                                val parsed = Pairing.parse(barcode.rawValue.orEmpty())
+                                if (parsed == null) {
+                                    message = "That QR code isn't from ecoz."
+                                } else {
+                                    store.save(parsed)
+                                    pairing = parsed
+                                    resumeAfterPairing()
+                                    message = "Paired with ${parsed.name}."
+                                }
+                            }
+                            .addOnFailureListener {
+                                message = "Couldn't scan. Check that Google Play services is up to date, or paste the code."
+                            }
+                    },
                     onPair = {
                         val parsed = Pairing.parse(code)
                         if (parsed == null) {
@@ -164,6 +194,7 @@ private fun EcozScreen(store: Store, resumeTick: Int) {
                         } else {
                             store.save(parsed)
                             pairing = parsed
+                            resumeAfterPairing()
                             code = ""
                             message = "Paired with ${parsed.name}."
                         }
@@ -464,15 +495,20 @@ private fun PairCard(
     code: String,
     onCodeChange: (String) -> Unit,
     onPaste: () -> Unit,
+    onScan: () -> Unit,
     onPair: () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Pair with your laptop", style = MaterialTheme.typography.titleMedium)
             Text(
-                "On the laptop run  ecoz_daemon.py pair  and copy the code. " +
-                    "KDE Connect clipboard sync will bring it here. Then tap Paste.",
+                "On the laptop run  ecoz pair  to show a QR code, then tap Scan QR code.",
                 style = MaterialTheme.typography.bodyMedium,
+            )
+            Button(onClick = onScan, modifier = Modifier.fillMaxWidth()) { Text("Scan QR code") }
+            Text(
+                "No camera? Copy the code from the laptop window and paste it here instead.",
+                style = MaterialTheme.typography.bodySmall,
             )
             OutlinedTextField(
                 value = code,

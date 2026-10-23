@@ -3,7 +3,7 @@
 
 Receives links/text from the phone over HTTPS on the LAN and opens them here.
 
-  ecoz_daemon.py pair            print the pairing code (copy it to the phone)
+  ecoz_daemon.py pair            show a QR code for the phone to scan (the code is also printed as text)
   ecoz_daemon.py serve           run the service (default)
   ecoz_daemon.py send [link|text]   push a link or text to the phone
                                     (no argument: sends the current clipboard)
@@ -1478,6 +1478,17 @@ def hotspot_setting(args):
     report(f"Asking the phone for a hotspot when offline is {'on' if HOTSPOT_ON_FLAG.exists() else 'off'}.")
 
 
+def pair_phone():
+    """CLI: pair a phone. Opens the QR window (when there is a screen) and, in a terminal, prints the code as text."""
+    code = pairing_code(ensure_identity())
+    if os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY"):
+        subprocess.Popen([sys.executable, "-I", str(Path(__file__).with_name("ecoz_pair.py")), code, socket.gethostname()],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, start_new_session=True)
+    if sys.stdout.isatty():
+        print(f"Scan the QR code in the window with the ecoz app, or paste this code:\n{code}\n")
+        print("This is a password for your laptop: don't share it or a picture of it.")
+
+
 def open_sms():
     subprocess.Popen([sys.executable, "-I", str(Path(__file__).with_name("ecoz_sms.py"))],
                      stdin=subprocess.DEVNULL, start_new_session=True)
@@ -1615,7 +1626,7 @@ def main():
     elif cmd == "sms-call":
         sms_call(sys.argv[2:])
     elif cmd == "pair":
-        print(pairing_code(ensure_identity()))
+        pair_phone()
     elif cmd == "serve":
         serve()
     else:
