@@ -22,7 +22,9 @@ For everyday use, link the wrapper onto your PATH:
     ecoz send                        # whatever is on the clipboard
     ecoz sync off                    # pause automatic clipboard sync (on to resume)
     ecoz ring                        # find my phone: alarm at full volume (ecoz ring stop)
-    ecoz send-file photo.jpg doc.pdf # offer files; the phone pulls them into its Downloads
+    ecoz send-file photo.jpg doc.pdf # offer files; the phone asks, then pulls them into Download/laptop
+    ecoz confirm [on|off]            # ask before accepting files from the phone (default on)
+    ecoz settings                    # settings window (also "ecoz" in the app grid)
 
 Clipboard sync needs the GSConnect GNOME extension, whose clipboard bridge ecoz uses to read
 and write the Wayland clipboard. Anything you copy on the laptop lands on the phone's
@@ -36,11 +38,19 @@ clipboard automatically (password-manager copies and anything over 64 KB are ski
 Open the app, paste the pairing code, then use Share → "Send to laptop". Turn on
 "Receive from laptop" to get items and clipboard changes pushed from the laptop.
 
-To send files from Files (Nautilus), link the script in and right-click → Scripts → Send to Phone:
+To send files from Files (Nautilus), link the script in and right-click → Scripts → Send to Phone,
+and add the settings launcher to the app grid:
 
     ln -s "$PWD/integrations/nautilus/Send to Phone" ~/.local/share/nautilus/scripts/
+    sed "s#@HOME@#$HOME#" integrations/ecoz.desktop.in > ~/.local/share/applications/ecoz.desktop
 
-Files from the phone arrive in `~/Downloads` (set `ECOZ_RECEIVE_DIR` to change it): share any
+Both directions ask first, and each device decides for itself: the laptop's "ask before accepting
+files from the phone" is in `ecoz settings`, the phone's "ask before receiving files" is a switch in
+the app (both default to on). Asking happens before any data moves: the sender describes the files,
+the receiver accepts or declines (a notification with Accept and Decline), and only an accepted
+upload gets a one-time ticket. A batch is one question. Unanswered or swiped-away counts as no.
+
+Files from the phone arrive in `~/Downloads/phone` (set `ECOZ_RECEIVE_DIR` to change it), and files from the laptop in `Download/laptop` on the phone: share any
 file from any app to "Send to laptop". Transfers stream over the same pinned-TLS link, so size is
 limited only by free disk space (512 MiB is always kept free). A file is written under a hidden
 temporary name and renamed when complete, names are reduced to a plain base name (duplicates get

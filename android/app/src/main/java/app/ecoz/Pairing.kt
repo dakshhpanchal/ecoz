@@ -51,6 +51,11 @@ class Store(context: Context) {
         get() = prefs.getBoolean("listen", false)
         set(value) = prefs.edit().putBoolean("listen", value).apply()
 
+    /** Ask before accepting files the laptop sends. Each device decides this for itself. */
+    var confirmIncomingFiles: Boolean
+        get() = prefs.getBoolean("confirm_incoming_files", true)
+        set(value) = prefs.edit().putBoolean("confirm_incoming_files", value).apply()
+
     /** Show phone notifications on the laptop. */
     var mirrorNotifications: Boolean
         get() = prefs.getBoolean("mirror_notifications", false)

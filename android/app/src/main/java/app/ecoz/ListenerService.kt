@@ -10,6 +10,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.Uri
+import android.text.format.Formatter
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -22,6 +23,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URI
 
@@ -47,7 +49,10 @@ class ListenerService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         notifications = getSystemService(NotificationManager::class.java)
         createChannels()
-        if (intent?.action == ACTION_STOP_RING) stopRinging()
+        when (intent?.action) {
+            ACTION_STOP_RING -> stopRinging()
+            ACTION_ACCEPT_FILES, ACTION_DECLINE_FILES -> answerFileOffer(intent!!)
+        }
         ServiceCompat.startForeground(
             this, FOREGROUND_ID, foregroundNotification("Connecting…"),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
@@ -55,10 +60,10 @@ class ListenerService : Service() {
         val store = Store(applicationContext)
         if (intent?.action == ACTION_UPLOAD) {
             val uris = (0 until (intent.clipData?.itemCount ?: 0)).mapNotNull { intent.clipData?.getItemAt(it)?.uri }
-            // If the user hasn't turned on "Receive from laptop", this service exists only for the upload.
-            Transfers.onIdle = { if (!store.listenEnabled) stopSelf() }
             Transfers.upload(applicationContext, scope, store, uris)
         }
+        // If "Receive from laptop" is off, this service exists only for a transfer: stop when it ends.
+        Transfers.onIdle = { if (!store.listenEnabled) stopSelf() }
         if (job == null && store.listenEnabled) job = scope.launch { connectLoop() }
         return START_STICKY
     }
@@ -117,11 +122,7 @@ class ListenerService : Service() {
                 "text" -> copyText(id, value)
                 "clip" -> if (Store(applicationContext).clipboardSync) ClipboardSync.apply(applicationContext, value)
                 "pull" -> showPullRequest(id)
-                "file" -> runCatching {
-                    val offer = JSONObject(value)
-                    Transfers.receive(applicationContext, scope, Store(applicationContext),
-                        offer.getString("id"), offer.getString("name"), offer.getLong("size"))
-                }
+                "files" -> runCatching { handleFileOffer(JSONObject(value).getJSONArray("files")) }
                 "ring" -> if (value == "start") startRinging() else stopRinging()
                 "notif-action" -> runCatching {
                     val action = JSONObject(value)
@@ -133,6 +134,64 @@ class ListenerService : Service() {
         }
         // Ack even duplicates, otherwise the laptop keeps re-sending them.
         if (id.isNotEmpty()) EcozClient.ack(pairing, id)
+    }
+
+    /** The laptop wants to send files. Ask first, unless this phone's setting says to accept automatically. */
+    private fun handleFileOffer(array: JSONArray) {
+        val files = (0 until array.length()).map { i ->
+            array.getJSONObject(i).let { IncomingFile(it.getString("id"), it.getString("name"), it.getLong("size")) }
+        }
+        if (files.isEmpty()) return
+        val store = Store(applicationContext)
+        if (!store.confirmIncomingFiles) {
+            Transfers.receive(applicationContext, scope, store, files)
+            return
+        }
+        val noticeId = FILE_OFFER_BASE + (files[0].id.hashCode() and 0xFFFF)
+        val total = Formatter.formatShortFileSize(this, files.sumOf { it.size })
+        val (title, text) = if (files.size == 1) {
+            "Laptop wants to send you a file" to "${files[0].name}  ($total)"
+        } else {
+            val shown = files.take(3).joinToString(", ") { it.name } + if (files.size > 3) " and ${files.size - 3} more" else ""
+            "Laptop wants to send you ${files.size} files" to "$shown  ($total in total)"
+        }
+        notifications.notify(
+            noticeId,
+            NotificationCompat.Builder(this, CHANNEL_INCOMING)
+                .setSmallIcon(R.drawable.ic_stat_ecoz)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+                .addAction(0, "Accept", offerAnswer(ACTION_ACCEPT_FILES, files, noticeId))
+                .addAction(0, "Decline", offerAnswer(ACTION_DECLINE_FILES, files, noticeId))
+                .setDeleteIntent(offerAnswer(ACTION_DECLINE_FILES, files, noticeId)) // swiping it away means no
+                .setAutoCancel(true)
+                .setTimeoutAfter(FILE_OFFER_PROMPT_MS)
+                .build(),
+        )
+    }
+
+    private fun offerAnswer(action: String, files: List<IncomingFile>, noticeId: Int): PendingIntent {
+        val json = JSONArray().apply {
+            files.forEach { put(JSONObject().put("id", it.id).put("name", it.name).put("size", it.size)) }
+        }
+        return PendingIntent.getForegroundService(
+            this, noticeId * 3 + if (action == ACTION_ACCEPT_FILES) 1 else 2,
+            Intent(this, ListenerService::class.java).setAction(action)
+                .putExtra(EXTRA_OFFER, json.toString()).putExtra(EXTRA_NOTICE, noticeId),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+    }
+
+    private fun answerFileOffer(intent: Intent) {
+        val array = runCatching { JSONArray(intent.getStringExtra(EXTRA_OFFER).orEmpty()) }.getOrNull() ?: return
+        val files = (0 until array.length()).map { i ->
+            array.getJSONObject(i).let { IncomingFile(it.getString("id"), it.getString("name"), it.getLong("size")) }
+        }
+        notifications.cancel(intent.getIntExtra(EXTRA_NOTICE, 0))
+        val store = Store(applicationContext)
+        if (intent.action == ACTION_ACCEPT_FILES) Transfers.receive(applicationContext, scope, store, files)
+        else Transfers.decline(applicationContext, scope, store, files)
     }
 
     private fun startRinging() {
@@ -259,6 +318,12 @@ class ListenerService : Service() {
         private const val CHANNEL_ALARM = "alarm"
         const val CHANNEL_TRANSFER = "transfers"
         const val ACTION_UPLOAD = "app.ecoz.UPLOAD"
+        private const val ACTION_ACCEPT_FILES = "app.ecoz.ACCEPT_FILES"
+        private const val ACTION_DECLINE_FILES = "app.ecoz.DECLINE_FILES"
+        private const val EXTRA_OFFER = "offer"
+        private const val EXTRA_NOTICE = "notice"
+        private const val FILE_OFFER_BASE = 5000
+        private const val FILE_OFFER_PROMPT_MS = 10 * 60_000L
         private const val ACTION_STOP_RING = "app.ecoz.STOP_RING"
         private const val RING_ID = 2
         private const val RING_MAX_MS = 60_000L

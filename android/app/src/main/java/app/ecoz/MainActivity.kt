@@ -110,6 +110,7 @@ private fun EcozScreen(store: Store, resumeTick: Int) {
     }
     var clipboardSync by remember { mutableStateOf(store.clipboardSync) }
     var mirror by remember { mutableStateOf(store.mirrorNotifications) }
+    var confirmFiles by remember { mutableStateOf(store.confirmIncomingFiles) }
     val notificationAccess = remember(resumeTick) {
         NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
     }
@@ -164,7 +165,7 @@ private fun EcozScreen(store: Store, resumeTick: Int) {
                         Text("How to use", style = MaterialTheme.typography.titleMedium)
                         Text(
                             "In any app, tap Share and choose “Send to laptop”. A link opens on your laptop; " +
-                                "a photo, video or file goes to its Downloads folder. To send from the laptop, " +
+                                "a photo, video or file goes to the laptop's Downloads/phone folder, and files you send from the laptop arrive in Downloads/laptop here. To send from the laptop, " +
                                 "use  ecoz send-file  or right-click a file and choose Send to Phone.",
                             style = MaterialTheme.typography.bodyMedium,
                         )
@@ -217,6 +218,29 @@ private fun EcozScreen(store: Store, resumeTick: Int) {
                         Text(
                             "To send what you copied here to the laptop, tap “Send clipboard” in the ecoz " +
                                 "notification. Android doesn't let apps watch the clipboard in the background.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Ask before receiving files", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    if (confirmFiles) "A notification asks you to accept or decline"
+                                    else "Files from the laptop are accepted automatically",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                            }
+                            Switch(checked = confirmFiles, onCheckedChange = {
+                                confirmFiles = it
+                                store.confirmIncomingFiles = it
+                            })
+                        }
+                        Text(
+                            "This is only for files sent to the phone. Whether the laptop asks before " +
+                                "accepting files from the phone is a separate setting: run  ecoz settings  on the laptop.",
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }

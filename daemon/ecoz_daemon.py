@@ -9,7 +9,9 @@ Receives links/text from the phone over HTTPS on the LAN and opens them here.
                                     (no argument: sends the current clipboard)
   ecoz_daemon.py pull               ask the phone to send its clipboard here
   ecoz_daemon.py sync [on|off]      show or switch automatic clipboard sync
-  ecoz_daemon.py send-file <path>... send files to the phone (it pulls them over the secure link)
+  ecoz_daemon.py send-file <path>... send files to the phone (it asks first, unless you turned that off there)
+  ecoz_daemon.py confirm [on|off]   ask before accepting files from the phone (default on)
+  ecoz_daemon.py settings           open the settings window
   ecoz_daemon.py ring [stop]        make the phone ring (find my phone)
   ecoz_daemon.py notif-action <key> <index> [text]
                                     press a button on a phone notification (text = reply)
@@ -129,6 +131,13 @@ CLIP_OFF_FLAG = CONF / "clipboard-sync-off"   # file present = sync paused
 SENSITIVE_MIMETYPES = ("x-kde-passwordManagerHint",)  # password managers mark their copies
 _clip_lock = threading.Lock()
 _last_clip = None  # last text synced in either direction; stops echoes and duplicates
+
+
+CONFIRM_OFF_FLAG = CONF / "confirm-incoming-off"   # file present = accept files from the phone without asking
+
+
+def confirm_incoming():
+    return not CONFIRM_OFF_FLAG.exists()
 
 
 def clip_sync_enabled():
@@ -262,7 +271,7 @@ HUB = Hub()
 
 # --- file transfer -----------------------------------------------------------------
 def receive_dir():
-    """Where files from the phone land: ~/Downloads (or the XDG download folder)."""
+    """Where files from the phone land: a "phone" folder inside the XDG download folder."""
     override = os.environ.get("ECOZ_RECEIVE_DIR")
     if override:
         return Path(override)
@@ -270,7 +279,8 @@ def receive_dir():
         found = subprocess.run(["xdg-user-dir", "DOWNLOAD"], capture_output=True, text=True, timeout=3).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         found = ""
-    return Path(found) if found and found != str(Path.home()) else Path.home() / "Downloads"
+    downloads = Path(found) if found and found != str(Path.home()) else Path.home() / "Downloads"
+    return downloads / "phone"
 
 
 def safe_filename(raw):
@@ -342,6 +352,128 @@ class Outbox:
 
 
 OUTBOX = Outbox()
+
+
+class Offers:
+    """Files the phone wants to send. Nothing is written until the laptop says yes.
+
+    The phone first describes what it wants to send (names and sizes). If confirmation is on,
+    a notification with Accept / Decline is shown and the request waits for the answer. Each
+    accepted file gets a one-time ticket that the upload must present, so an upload nobody
+    approved is refused.
+    """
+    ASK_SECONDS = float(os.environ.get("ECOZ_ASK_SECONDS", "120"))
+    TICKET_SECONDS = 600
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._pending = {}  # desktop notification id -> offer
+        self._tickets = {}  # ticket -> {"name", "size", "expires", "offer"}
+
+    # -- creating and answering an offer
+    def request(self, files):
+        """Blocks until the offer is answered. Returns the list of tickets if accepted, else None."""
+        offer = {"files": files, "event": threading.Event(), "accepted": False, "desktop_id": None,
+                 "left": len(files), "done": 0, "failed": 0}
+        if confirm_incoming():
+            self._ask(offer)
+            offer["event"].wait(self.ASK_SECONDS)
+            self._close_prompt(offer)
+            if not offer["accepted"]:
+                return None
+        return self._issue_tickets(offer)
+
+    def _ask(self, offer):
+        from gi.repository import GLib
+        files = offer["files"]
+        total = sum(f["size"] for f in files)
+        if len(files) == 1:
+            summary, body = "Phone wants to send you a file", f"{files[0]['name']}  ({human_size(total)})"
+        else:
+            shown = ", ".join(f["name"] for f in files[:3]) + (f" and {len(files) - 3} more" if len(files) > 3 else "")
+            summary, body = f"Phone wants to send you {len(files)} files", f"{shown}  ({human_size(total)} in total)"
+        try:
+            reply = PHONE_NOTIFICATIONS._call(
+                "Notify",
+                ("ecoz", 0, "document-send-symbolic", GLib.markup_escape_text(summary), GLib.markup_escape_text(body),
+                 ["accept", "Accept", "decline", "Decline"],
+                 # critical so it shows even in Do Not Disturb; we close it ourselves when answered
+                 {"urgency": GLib.Variant("y", 2)}, 0),
+                "(susssasa{sv}i)", "(u)")
+        except Exception as e:  # no notification service: refuse rather than accept unseen
+            print(f"could not ask about an incoming file: {e}", file=sys.stderr, flush=True)
+            offer["event"].set()
+            return
+        with self._lock:
+            offer["desktop_id"] = reply.unpack()[0]
+            self._pending[offer["desktop_id"]] = offer
+
+    def _close_prompt(self, offer):
+        desktop_id = offer["desktop_id"]
+        with self._lock:
+            self._pending.pop(desktop_id, None)
+        if desktop_id:
+            try:
+                PHONE_NOTIFICATIONS._call("CloseNotification", (desktop_id,), "(u)", None)
+            except Exception:
+                pass
+
+    def action_invoked(self, desktop_id, button_id):
+        """Accept/Decline pressed. Returns True if this notification was one of our prompts."""
+        with self._lock:
+            offer = self._pending.get(desktop_id)
+        if offer is None:
+            return False
+        offer["accepted"] = button_id == "accept"
+        offer["event"].set()
+        return True
+
+    def closed(self, desktop_id, reason):
+        """The prompt was swiped away (reason 2): that counts as a no."""
+        with self._lock:
+            offer = self._pending.get(desktop_id)
+        if offer is not None and reason == 2:
+            offer["accepted"] = False
+            offer["event"].set()
+
+    # -- tickets
+    def _issue_tickets(self, offer):
+        tickets = []
+        with self._lock:
+            now = time.time()
+            for stale in [t for t, v in self._tickets.items() if v["expires"] < now]:
+                del self._tickets[stale]
+            for f in offer["files"]:
+                ticket = secrets.token_urlsafe(16)
+                self._tickets[ticket] = {"name": f["name"], "size": f["size"],
+                                         "expires": now + self.TICKET_SECONDS, "offer": offer}
+                tickets.append(ticket)
+        return tickets
+
+    def redeem(self, ticket):
+        """One-time use. Returns {"name", "size", "offer"} or None."""
+        with self._lock:
+            info = self._tickets.pop(ticket, None)
+        return info if info and info["expires"] > time.time() else None
+
+    def finished(self, info, ok):
+        """Called after each file; one summary notification when the whole offer is done."""
+        offer = info["offer"]
+        with self._lock:
+            offer["left"] -= 1
+            offer["done" if ok else "failed"] += 1
+            last = offer["left"] == 0
+            done, failed = offer["done"], offer["failed"]
+        if not last:
+            return
+        files = offer["files"]
+        if len(files) == 1 and done == 1:
+            notify("Received from phone", f"{files[0]['name']}  ({human_size(files[0]['size'])})")
+        elif done:
+            notify("Received from phone", f"{done} file{'s' if done != 1 else ''}" + (f", {failed} failed" if failed else ""))
+
+
+OFFERS = Offers()
 
 
 # --- phone notifications mirrored onto the laptop -------------------------------------
@@ -525,13 +657,19 @@ def watch_notification_actions():
 
         def on_signal(_bus, _sender, _path, _iface, _signal, params):
             desktop_id, button_id = params.unpack()
-            PHONE_NOTIFICATIONS.action_invoked(desktop_id, button_id)
+            if not OFFERS.action_invoked(desktop_id, button_id):  # an Accept/Decline prompt, or...
+                PHONE_NOTIFICATIONS.action_invoked(desktop_id, button_id)  # ...a mirrored phone notification
+
+        def on_closed(_bus, _sender, _path, _iface, _signal, params):
+            desktop_id, reason = params.unpack()
+            OFFERS.closed(desktop_id, reason)
 
         def on_token(_bus, _sender, _path, _iface, _signal, params):
             desktop_id, token = params.unpack()  # arrives just before ActionInvoked for the same click
             PHONE_NOTIFICATIONS.remember_token(desktop_id, token)
 
-        for signal, handler in (("ActivationToken", on_token), ("ActionInvoked", on_signal)):
+        for signal, handler in (("ActivationToken", on_token), ("ActionInvoked", on_signal),
+                                ("NotificationClosed", on_closed)):
             bus.signal_subscribe(
                 "org.freedesktop.Notifications", "org.freedesktop.Notifications", signal,
                 "/org/freedesktop/Notifications", None, Gio.DBusSignalFlags.NONE, handler)
@@ -548,9 +686,15 @@ def check_item(kind, value, allowed=("url", "text")):
         return "empty clipboard"
     if kind == "ring" and value not in ("start", "stop"):
         return "bad ring command"
-    if kind == "file":
-        if not value or len(value) > 4096 or "\0" in value:
-            return "bad file path"
+    if kind == "files":
+        try:
+            paths = json.loads(value)
+            ok = (isinstance(paths, list) and 0 < len(paths) <= 50
+                  and all(isinstance(x, str) and 0 < len(x) <= 4096 and "\0" not in x for x in paths))
+        except ValueError:
+            ok = False
+        if not ok:
+            return "bad file list"
     if kind == "notif-action":
         try:
             action = json.loads(value)
@@ -586,20 +730,50 @@ class Handler(BaseHTTPRequestHandler):
     def _is_local(self):
         return self.client_address[0] in ("127.0.0.1", "::1")
 
+    def _file_offer(self):
+        """Phone -> laptop, step 1: describe the files, wait for the laptop's answer, hand out tickets."""
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= MAX_BODY:
+                raise ValueError("bad length")
+            requested = json.loads(self.rfile.read(length))["files"]
+            if not isinstance(requested, list) or not 0 < len(requested) <= 50:
+                raise ValueError("bad file list")
+            files = [{"name": safe_filename(str(f["name"])), "size": int(f["size"])} for f in requested]
+            if any(f["size"] < 0 for f in files):
+                raise ValueError("bad size")
+        except (ValueError, KeyError, TypeError):
+            return self._json(400, {"ok": False, "error": "bad request"})
+        try:
+            # Nothing is created until a file is actually accepted: measure the nearest folder that exists.
+            probe = receive_dir()
+            while not probe.exists() and probe != probe.parent:
+                probe = probe.parent
+            if sum(f["size"] for f in files) > shutil.disk_usage(probe).free - MIN_FREE_BYTES:
+                return self._json(507, {"ok": False, "error": "not enough disk space"})
+        except OSError:
+            return self._json(500, {"ok": False, "error": "receive folder unavailable"})
+        tickets = OFFERS.request(files)  # may wait while the laptop asks you
+        if tickets is None:
+            return self._json(200, {"ok": True, "accepted": False})
+        self._json(200, {"ok": True, "accepted": True, "tickets": tickets})
+
     def _receive_file(self):
-        """Phone -> laptop: stream the request body to a file in the receive folder."""
+        """Phone -> laptop, step 2: stream one approved file. Refused without a valid ticket."""
+        info = OFFERS.redeem(self.headers.get("X-Ecoz-Ticket", ""))
+        if info is None:
+            return self._json(403, {"ok": False, "error": "no approval for this upload"})
         try:
             length = int(self.headers.get("Content-Length", ""))
         except ValueError:
+            OFFERS.finished(info, False)
             return self._json(411, {"ok": False, "error": "length required"})
-        if length < 0:
-            return self._json(400, {"ok": False, "error": "bad length"})
-        name = safe_filename(self.headers.get("X-Ecoz-Name"))
-        folder = receive_dir()
+        if length != info["size"]:  # what was approved is what must arrive
+            OFFERS.finished(info, False)
+            return self._json(400, {"ok": False, "error": "size differs from the offer"})
+        name, folder = info["name"], receive_dir()
         try:
             folder.mkdir(parents=True, exist_ok=True)
-            if length > shutil.disk_usage(folder).free - MIN_FREE_BYTES:
-                return self._json(507, {"ok": False, "error": "not enough disk space"})
             final = unique_path(folder, name)
             part = folder / f".{final.name}.ecoz-part"
             self.connection.settimeout(FILE_STALL_SECONDS)
@@ -621,8 +795,9 @@ class Handler(BaseHTTPRequestHandler):
                 raise
         except OSError as e:
             print(f"receive failed: {e}", file=sys.stderr, flush=True)
+            OFFERS.finished(info, False)
             return self._json(400, {"ok": False, "error": "transfer failed"})
-        notify("Received from phone", f"{final.name}  ({human_size(length)})")
+        OFFERS.finished(info, True)
         self._json(200, {"ok": True, "name": final.name})
 
     def _send_file(self, file_id):
@@ -721,13 +896,23 @@ class Handler(BaseHTTPRequestHandler):
         self._json(200, {"ok": True})
 
     def do_POST(self):
-        if self.path not in ("/v1/handoff", "/v1/push", "/v1/ack", "/v1/notification",
-                             "/v1/notification/dismiss", "/v1/file"):
+        is_decline = self.path.startswith("/v1/file/") and self.path.endswith("/decline")
+        if not is_decline and self.path not in ("/v1/handoff", "/v1/push", "/v1/ack", "/v1/notification",
+                                                "/v1/notification/dismiss", "/v1/file", "/v1/file/offer"):
             return self._json(404, {"ok": False})
         if not self._authed():
             return self._json(401, {"ok": False, "error": "unauthorized"})
+        if is_decline:  # the phone said no to a file the laptop offered it
+            file_id = self.path[len("/v1/file/"):-len("/decline")]
+            info = OUTBOX.get(file_id)
+            OUTBOX.done(file_id)
+            if info:
+                notify("Phone declined", info["name"])
+            return self._json(200, {"ok": True})
         if self.path == "/v1/file":
             return self._receive_file()
+        if self.path == "/v1/file/offer":
+            return self._file_offer()
         if self.path.startswith("/v1/notification"):
             return self._phone_notification(dismiss=self.path.endswith("/dismiss"))
         try:
@@ -743,23 +928,25 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"ok": False, "error": "bad request"})
 
         # "pull" (ask the phone for its clipboard) only makes sense laptop -> phone
-        allowed = ("url", "text", "pull", "clip", "ring", "notif-action", "file") if self.path == "/v1/push" else ("url", "text", "clip")
+        allowed = ("url", "text", "pull", "clip", "ring", "notif-action", "files") if self.path == "/v1/push" else ("url", "text", "clip")
         error = check_item(kind, value, allowed)
         if error:
             return self._json(400, {"ok": False, "error": error})
 
-        if self.path == "/v1/push" and kind == "file":
+        if self.path == "/v1/push" and kind == "files":
             # The token is shared with the phone, so only a process on this laptop may offer a
             # path; otherwise the phone could ask for any file it can name.
             if not self._is_local():
                 return self._json(403, {"ok": False, "error": "file offers are local only"})
-            try:
-                file_id, info = OUTBOX.add(value)
-            except ValueError as e:
-                return self._json(400, {"ok": False, "error": str(e)})
-            offer = json.dumps({"id": file_id, "name": info["name"], "size": info["size"]})
-            return self._json(200, {"ok": True, "name": info["name"], "size": info["size"],
-                                    "status": HUB.publish({"type": "file", "value": offer})})
+            offered = []
+            for path in json.loads(value):
+                try:
+                    file_id, info = OUTBOX.add(path)
+                except ValueError:
+                    return self._json(400, {"ok": False, "error": f"not a readable file: {os.path.basename(path)}"})
+                offered.append({"id": file_id, "name": info["name"], "size": info["size"]})
+            return self._json(200, {"ok": True, "files": offered,
+                                    "status": HUB.publish({"type": "files", "value": json.dumps({"files": offered})})})
 
         if self.path == "/v1/push":  # laptop -> phone
             # a ring request is pointless minutes later, so it is never queued for a reconnect
@@ -872,16 +1059,29 @@ def send_to_phone(words):
     push(kind, value)
 
 
-def sync_setting(args):
-    """CLI: show or change automatic clipboard sync (takes effect immediately)."""
+def flag_setting(label, flag, args, usage):
+    """CLI: show or change an on/off setting stored as a flag file (takes effect immediately)."""
     CONF.mkdir(parents=True, exist_ok=True)
     if args and args[0] == "off":
-        CLIP_OFF_FLAG.touch()
+        flag.touch()
     elif args and args[0] == "on":
-        CLIP_OFF_FLAG.unlink(missing_ok=True)
+        flag.unlink(missing_ok=True)
     elif args:
-        sys.exit("usage: ecoz_daemon.py sync [on|off]")
-    report(f"Clipboard sync is {'on' if clip_sync_enabled() else 'off'}.")
+        sys.exit(f"usage: {usage} [on|off]")
+    report(f"{label} is {'off' if flag.exists() else 'on'}.")
+
+
+def sync_setting(args):
+    flag_setting("Clipboard sync", CLIP_OFF_FLAG, args, "ecoz_daemon.py sync")
+
+
+def confirm_setting(args):
+    flag_setting("Asking before accepting files from the phone", CONFIRM_OFF_FLAG, args, "ecoz_daemon.py confirm")
+
+
+def open_settings():
+    subprocess.Popen([sys.executable, "-I", str(Path(__file__).with_name("ecoz_settings.py"))],
+                     stdin=subprocess.DEVNULL, start_new_session=True)
 
 
 def notification_action(args):
@@ -895,26 +1095,28 @@ def notification_action(args):
 
 
 def send_files(args):
-    """CLI: offer files to the phone. It downloads them over the secure link."""
+    """CLI: offer files to the phone in one batch. The phone asks its owner, then downloads them."""
     if not args:
         sys.exit("usage: ecoz_daemon.py send-file <path>...")
-    sent, problems = [], []
+    paths, problems = [], []
     for raw in args:
         path = os.path.abspath(os.path.expanduser(raw))
         if os.path.isdir(path):
             problems.append(f"{os.path.basename(path)}: folders aren't supported yet")
-            continue
-        outcome = push_raw("file", path)
-        if outcome is None:
-            problems.append(f"{os.path.basename(path)}: couldn't be sent")
+        elif not os.path.isfile(path):
+            problems.append(f"{os.path.basename(path)}: not a file")
         else:
-            sent.append(outcome)
-    if sent:
-        names = ", ".join(f"{b['name']} ({human_size(b['size'])})" for b in sent[:3]) + (" ..." if len(sent) > 3 else "")
-        online = all(b["status"] == "delivered" for b in sent)
-        report(f"Offered to the phone: {names}" if online else f"Phone not connected; it will fetch them when it is: {names}")
+            paths.append(path)
+    if paths:
+        body = push_raw("files", json.dumps(paths))
+        if body is None:
+            report("The service refused that.", failed=True)
+        files = body["files"]
+        names = ", ".join(f"{f['name']} ({human_size(f['size'])})" for f in files[:3]) + (" ..." if len(files) > 3 else "")
+        report(f"Offered to the phone, waiting for it to accept: {names}" if body["status"] == "delivered"
+               else f"Phone not connected; it will be asked when it is: {names}")
     for problem in problems:
-        report(problem, failed=not sent)
+        report(problem, failed=not paths)
 
 
 def ring_phone(args):
@@ -978,6 +1180,10 @@ def main():
         notification_action(sys.argv[2:])
     elif cmd == "sync":
         sync_setting(sys.argv[2:])
+    elif cmd == "confirm":
+        confirm_setting(sys.argv[2:])
+    elif cmd == "settings":
+        open_settings()
     elif cmd == "pair":
         print(pairing_code(ensure_identity()))
     elif cmd == "serve":

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=ecoz
+Comment=Settings for phone sync: files, clipboard, notifications
+Exec=@HOME@/.local/bin/ecoz settings
+Icon=preferences-system-symbolic
+Terminal=false
+Categories=Utility;
+StartupNotify=false
