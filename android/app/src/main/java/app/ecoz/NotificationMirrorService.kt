@@ -139,6 +139,7 @@ class NotificationMirrorService : NotificationListenerService() {
         val noisy = Notification.FLAG_ONGOING_EVENT or Notification.FLAG_FOREGROUND_SERVICE or Notification.FLAG_GROUP_SUMMARY
         if (n.flags and noisy != 0) return false
         if (n.visibility == Notification.VISIBILITY_SECRET) return false
+        if (n.category == Notification.CATEGORY_CALL && Store(applicationContext).callsEnabled) return false // shown by the call card
         return when (n.category) {
             Notification.CATEGORY_TRANSPORT, Notification.CATEGORY_PROGRESS,
             Notification.CATEGORY_SERVICE, Notification.CATEGORY_SYSTEM -> false

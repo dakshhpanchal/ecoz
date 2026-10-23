@@ -13,6 +13,9 @@ Receives links/text from the phone over HTTPS on the LAN and opens them here.
   ecoz_daemon.py confirm [on|off]   ask before accepting files from the phone (default on)
   ecoz_daemon.py settings           open the settings window
   ecoz_daemon.py hotspot [on|off|test] call for a phone hotspot when the laptop has no internet (default off)
+  ecoz_daemon.py call <number>      dial a number from the phone
+  ecoz_daemon.py answer|decline|hangup   answer, decline or end the phone's current call
+  ecoz_daemon.py audio [connect]    hear calls on the laptop: connect the Bluetooth-paired phone's hands-free audio
   ecoz_daemon.py sms                open your phone's texts in a window (switch on in the phone app first)
   ecoz_daemon.py proximity [on|off] listen for the phone's Bluetooth beacon (needed for lock/unlock; default off)
   ecoz_daemon.py presence           show whether the phone is near, with the signal strength
@@ -157,6 +160,7 @@ def autolock_enabled():
     return AUTOLOCK_ON_FLAG.exists()
 
 
+CALLS_OFF_FLAG = CONF / "calls-off"           # file present = don't show incoming phone calls
 HOTSPOT_TEST_FLAG = CONF / "hotspot-test"     # holds the time until which to pretend to be offline (for testing)
 HOTSPOT_ON_FLAG = CONF / "hotspot-on"         # file present = call for a hotspot when offline (off by default)
 
@@ -273,7 +277,7 @@ class Hub:
             for e in stale:
                 del self._inflight[e["id"]]
         for e in stale:
-            if e.get("type") not in ("clip", "unlock-challenge", "sms-req"):  # stale by the next retry
+            if e.get("type") not in ("clip", "unlock-challenge", "sms-req", "call"):  # stale by the next retry
                 self._deliver(e)
 
     def _deliver(self, event):
@@ -770,6 +774,60 @@ class PhoneNotifications:
 PHONE_NOTIFICATIONS = PhoneNotifications()
 
 
+class CallNotice:
+    """The desktop notification for the phone's current call: Answer / Decline while it rings, Hang up during it.
+
+    There is only ever one: it is replaced as the call moves from ringing to active, and closed when it ends.
+    Pressing a button sends the command to the phone, which does the real work.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._id = 0
+        self._state = None
+
+    def update(self, state, number, name):
+        from gi.repository import GLib
+        if state == "ended":
+            return self.close()
+        who = name or number or "Unknown number"
+        if state == "ringing":
+            summary, buttons = "Incoming call", ["answer", "Answer", "decline", "Decline"]
+        elif state == "active":
+            summary, buttons = "On a call", ["hangup", "Hang up"]
+        else:
+            return
+        with self._lock:
+            replaces = self._id
+            reply = PHONE_NOTIFICATIONS._call(
+                "Notify",
+                ("ecoz", replaces, "call-start-symbolic", GLib.markup_escape_text(summary), GLib.markup_escape_text(who),
+                 buttons, {"urgency": GLib.Variant("y", 2), "resident": GLib.Variant("b", True)}, 0),
+                "(susssasa{sv}i)", "(u)")
+            self._id = reply.unpack()[0]
+            self._state = state
+
+    def close(self):
+        with self._lock:
+            old, self._id, self._state = self._id, 0, None
+        if old:
+            try:
+                PHONE_NOTIFICATIONS._call("CloseNotification", (old,), "(u)", None)
+            except Exception:
+                pass
+
+    def action_invoked(self, desktop_id, button_id):
+        with self._lock:
+            mine = desktop_id == self._id and self._id != 0
+        if not mine or button_id not in ("answer", "decline", "hangup"):
+            return False
+        HUB.publish({"type": "call", "value": json.dumps({"action": button_id})}, queue_offline=False)
+        return True
+
+
+CALLS = CallNotice()
+
+
 def watch_notification_actions():
     """Route button presses on mirrored notifications back to the phone."""
     try:
@@ -786,7 +844,8 @@ def watch_notification_actions():
 
         def on_signal(_bus, _sender, _path, _iface, _signal, params):
             desktop_id, button_id = params.unpack()
-            if not (OFFERS.action_invoked(desktop_id, button_id) or PROMPTS.action_invoked(desktop_id, button_id)):
+            if not (OFFERS.action_invoked(desktop_id, button_id) or PROMPTS.action_invoked(desktop_id, button_id)
+                    or CALLS.action_invoked(desktop_id, button_id)):
                 PHONE_NOTIFICATIONS.action_invoked(desktop_id, button_id)  # a mirrored phone notification
 
         def on_closed(_bus, _sender, _path, _iface, _signal, params):
@@ -806,6 +865,9 @@ def watch_notification_actions():
         GLib.MainLoop(context).run()
 
     threading.Thread(target=run, daemon=True, name="notification-actions").start()
+
+
+PHONE_NUMBER = re.compile(r"[+0-9][0-9 ()\-]{2,24}")
 
 
 def check_item(kind, value, allowed=("url", "text")):
@@ -835,6 +897,15 @@ def check_item(kind, value, allowed=("url", "text")):
             ok = False
         if not ok:
             return "bad notification action"
+    if kind == "call":
+        try:
+            command = json.loads(value)
+            ok = (command.get("action") in ("answer", "decline", "hangup", "dial")
+                  and (command["action"] != "dial" or PHONE_NUMBER.fullmatch(str(command.get("number", "")))))
+        except (ValueError, AttributeError):
+            ok = False
+        if not ok:
+            return "bad call command"
     if kind == "url":
         parts = urlparse(value)
         if parts.scheme not in ("http", "https") or not parts.netloc:
@@ -931,6 +1002,31 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, KeyError, TypeError, AttributeError):
             return self._json(400, {"ok": False, "error": "bad request"})
         self._json(200, {"ok": SMS.answer(request_id, msg)})
+
+    def _call_state(self):
+        """Phone -> laptop: the call is ringing, active, ended, or failed."""
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= MAX_BODY:
+                raise ValueError("bad length")
+            msg = json.loads(self.rfile.read(length))
+            state = str(msg["state"])
+            if state not in ("ringing", "active", "ended", "error"):
+                raise ValueError("bad state")
+            number, name = str(msg.get("number", ""))[:40], str(msg.get("name", ""))[:100]
+        except (ValueError, KeyError, TypeError):
+            return self._json(400, {"ok": False, "error": "bad request"})
+        if CALLS_OFF_FLAG.exists():
+            return self._json(200, {"ok": True, "shown": False})
+        try:
+            if state == "error":
+                notify("Call didn't go through", str(msg.get("message", ""))[:200])
+            else:
+                CALLS.update(state, number, name)
+        except Exception as e:  # desktop notification service unavailable
+            print(f"call notification failed: {e}", file=sys.stderr, flush=True)
+            return self._json(502, {"ok": False, "error": "desktop notifications unavailable"})
+        self._json(200, {"ok": True, "shown": True})
 
     def _file_offer(self):
         """Phone -> laptop, step 1: describe the files, wait for the laptop's answer, hand out tickets."""
@@ -1111,7 +1207,7 @@ class Handler(BaseHTTPRequestHandler):
         if not is_decline and self.path not in ("/v1/handoff", "/v1/push", "/v1/ack", "/v1/notification",
                                                 "/v1/notification/dismiss", "/v1/file", "/v1/file/offer",
                                                 "/v1/unlock/register", "/v1/unlock/response",
-                                                "/v1/sms", "/v1/sms/response"):
+                                                "/v1/sms", "/v1/sms/response", "/v1/call"):
             return self._json(404, {"ok": False})
         if not self._authed():
             return self._json(401, {"ok": False, "error": "unauthorized"})
@@ -1126,6 +1222,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._receive_file()
         if self.path == "/v1/file/offer":
             return self._file_offer()
+        if self.path == "/v1/call":
+            return self._call_state()
         if self.path == "/v1/sms":
             return self._sms_request()
         if self.path == "/v1/sms/response":
@@ -1149,10 +1247,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"ok": False, "error": "bad request"})
 
         # "pull" (ask the phone for its clipboard) only makes sense laptop -> phone
-        allowed = ("url", "text", "pull", "clip", "ring", "notif-action", "files") if self.path == "/v1/push" else ("url", "text", "clip")
+        allowed = ("url", "text", "pull", "clip", "ring", "notif-action", "files", "call") if self.path == "/v1/push" else ("url", "text", "clip")
         error = check_item(kind, value, allowed)
         if error:
             return self._json(400, {"ok": False, "error": error})
+
+        if self.path == "/v1/push" and kind == "call":
+            # dialing spends money: only a process on this laptop may do it, never something holding just the token
+            if not self._is_local():
+                return self._json(403, {"ok": False, "error": "call commands are local only"})
+            return self._json(200, {"ok": True, "status": HUB.publish({"type": "call", "value": value}, queue_offline=False)})
 
         if self.path == "/v1/push" and kind == "files":
             # The token is shared with the phone, so only a process on this laptop may offer a
@@ -1171,7 +1275,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.path == "/v1/push":  # laptop -> phone
             # a ring request is pointless minutes later, so it is never queued for a reconnect
-            status = HUB.publish({"type": kind, "value": value}, queue_offline=(kind not in ("ring", "notif-action")))
+            status = HUB.publish({"type": kind, "value": value}, queue_offline=(kind not in ("ring", "notif-action", "call")))
             return self._json(200, {"ok": True, "status": status})
 
         if kind == "url":  # phone -> laptop
@@ -1489,6 +1593,53 @@ def pair_phone():
         print("This is a password for your laptop: don't share it or a picture of it.")
 
 
+def phone_bluetooth():
+    """The paired Bluetooth device that offers hands-free calling as a phone (its "Handsfree Audio Gateway"), or None."""
+    HFP_GATEWAY = "0000111f-0000-1000-8000-00805f9b34fb"
+    def bluetoothctl(*args):  # it colours its output even into a pipe
+        out = subprocess.run(["bluetoothctl", *args], capture_output=True, text=True, timeout=10).stdout
+        return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", out)
+
+    listed = bluetoothctl("devices", "Paired")
+    for line in listed.splitlines():
+        parts = line.split(" ", 2)
+        if len(parts) < 3 or parts[0] != "Device":
+            continue
+        info = bluetoothctl("info", parts[1])
+        if HFP_GATEWAY in info:
+            return {"address": parts[1], "name": parts[2], "connected": "Connected: yes" in info}
+    return None
+
+
+def audio_setup(args):
+    """CLI: hear phone calls on the laptop. Needs the phone paired with this laptop over Bluetooth, as a headset would be."""
+    phone = phone_bluetooth()
+    if phone is None:
+        sys.exit("No phone is paired with this laptop over Bluetooth yet.\n"
+                 "Open Bluetooth settings on both, pair them once (as you would a headset), then run this again.")
+    if args and args[0] == "connect":
+        subprocess.run(["bluetoothctl", "trust", phone["address"]], capture_output=True, timeout=10)  # reconnects by itself later
+        if not phone["connected"]:
+            done = subprocess.run(["bluetoothctl", "connect", phone["address"]], capture_output=True, text=True, timeout=30)
+            phone["connected"] = "Connection successful" in done.stdout
+    print(f"{phone['name']}: {'connected' if phone['connected'] else 'paired, not connected (run: ecoz audio connect)'}")
+    cards = subprocess.run(["pactl", "list", "cards", "short"], capture_output=True, text=True).stdout
+    mine = [c for c in cards.splitlines() if phone["address"].replace(":", "_").upper() in c.upper()]
+    print("Call audio: " + ("ready. A call on the phone will play through this laptop." if mine and phone["connected"]
+                            else "the audio device isn't up yet, connect first."))
+
+
+def call_command(action, args):
+    """CLI: answer, decline or hang up the phone's current call, or dial a number from the phone."""
+    command = {"action": action}
+    if action == "dial":
+        number = "".join(args).strip()
+        if not PHONE_NUMBER.fullmatch(number):
+            sys.exit("usage: ecoz_daemon.py call <phone number>")
+        command["number"] = number
+    push("call", json.dumps(command))
+
+
 def open_sms():
     subprocess.Popen([sys.executable, "-I", str(Path(__file__).with_name("ecoz_sms.py"))],
                      stdin=subprocess.DEVNULL, start_new_session=True)
@@ -1581,6 +1732,9 @@ def push(kind, value):
         if body["status"] != "delivered":
             report("Phone isn't connected, so that didn't go through.", failed=True)
         return
+    if kind == "call":
+        return report("Sent to the phone." if body["status"] == "delivered" else "Phone isn't connected.",
+                      failed=body["status"] != "delivered")
     if kind == "ring":
         return report(("Phone is ringing." if value == "start" else "Told the phone to stop.")
                       if body["status"] == "delivered" else "Phone isn't connected, so it can't ring.")
@@ -1621,6 +1775,12 @@ def main():
         open_settings()
     elif cmd == "hotspot":
         hotspot_setting(sys.argv[2:])
+    elif cmd == "call":
+        call_command("dial", sys.argv[2:])
+    elif cmd == "audio":
+        audio_setup(sys.argv[2:])
+    elif cmd in ("answer", "decline", "hangup"):
+        call_command(cmd, [])
     elif cmd == "sms":
         open_sms()
     elif cmd == "sms-call":

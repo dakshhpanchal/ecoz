@@ -114,6 +114,8 @@ object SmsBridge {
     }
 
     /** The contact's name for a number, if Android lets us look it up. */
+    fun contactName(context: Context, address: String): String? = displayName(context, address)
+
     private fun displayName(context: Context, address: String): String? {
         if (address.isEmpty() || !granted(context, Manifest.permission.READ_CONTACTS)) return null
         return nameCache.getOrPut(address) {

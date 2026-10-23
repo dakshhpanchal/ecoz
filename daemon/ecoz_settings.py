@@ -40,7 +40,7 @@ def flag_switch(title, subtitle, flag, on_when_present):
 
 class SettingsWindow(Adw.ApplicationWindow):
     def __init__(self, app):
-        super().__init__(application=app, title="ecoz", default_width=520, default_height=700)
+        super().__init__(application=app, title="ecoz", default_width=520, default_height=780)
 
         files = Adw.PreferencesGroup(title="Files from the phone")
         files.add(flag_switch(
@@ -58,6 +58,13 @@ class SettingsWindow(Adw.ApplicationWindow):
             "Share what I copy with the phone",
             "Text you copy on the laptop appears on the phone's clipboard. Password-manager copies are never sent.",
             CONF / "clipboard-sync-off", on_when_present=False))
+
+        calls = Adw.PreferencesGroup(title="Calls")
+        calls.add(flag_switch(
+            "Show incoming calls",
+            "A notification with Answer and Decline appears when your phone rings. Needs “Calls on the laptop” "
+            "turned on in the phone app.",
+            CONF / "calls-off", on_when_present=False))
 
         proximity = Adw.PreferencesGroup(title="Phone proximity")
         proximity.add(flag_switch(
@@ -81,6 +88,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         page = Adw.PreferencesPage()
         page.add(files)
         page.add(clipboard)
+        page.add(calls)
         page.add(proximity)
         page.add(network)
         view = Adw.ToolbarView()

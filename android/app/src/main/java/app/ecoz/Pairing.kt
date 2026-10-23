@@ -61,6 +61,11 @@ class Store(context: Context) {
         get() = prefs.getBoolean("sms", false)
         set(value) = prefs.edit().putBoolean("sms", value).apply()
 
+    /** Show phone calls on the laptop and let it answer, decline and dial. Off until the user turns it on. */
+    var callsEnabled: Boolean
+        get() = prefs.getBoolean("calls", false)
+        set(value) = prefs.edit().putBoolean("calls", value).apply()
+
     /** Offer a shortcut to the hotspot switch when the laptop nearby has no internet. */
     var hotspotHelp: Boolean
         get() = prefs.getBoolean("hotspot_help", false)

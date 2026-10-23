@@ -123,6 +123,12 @@ private fun EcozScreen(store: Store, resumeTick: Int) {
     var unlock by remember { mutableStateOf(store.unlockEnabled) }
     var texts by remember { mutableStateOf(store.smsEnabled) }
     var hotspotHelp by remember { mutableStateOf(store.hotspotHelp) }
+    var calls by remember { mutableStateOf(store.callsEnabled) }
+    val callPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        val ok = granted[Manifest.permission.READ_PHONE_STATE] == true
+        calls = ok
+        store.callsEnabled = ok
+    }
     val smsPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
         val ok = granted[Manifest.permission.READ_SMS] == true
         texts = ok
@@ -320,6 +326,29 @@ private fun EcozScreen(store: Store, resumeTick: Int) {
                             "Open them on the laptop with  ecoz sms . Only plain SMS works: chats using RCS " +
                                 "(“Chat features”) are not readable by any app. Codes sent by banks and sites " +
                                 "will be visible on the laptop too, so turn this off on a shared computer.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Calls on the laptop", style = MaterialTheme.typography.titleMedium)
+                                Text(if (calls) "On: the laptop shows calls and can answer them" else "Off", style = MaterialTheme.typography.bodyMedium)
+                            }
+                            Switch(checked = calls, onCheckedChange = { on ->
+                                if (on) callPermission.launch(CallBridge.PERMISSIONS) else {
+                                    calls = false
+                                    store.callsEnabled = false
+                                }
+                            })
+                        }
+                        Text(
+                            "The laptop shows who is calling, with Answer and Decline, and  ecoz call <number>  " +
+                                "dials from the phone. This is only the call controls: to hear the call on the " +
+                                "laptop, connect the phone to it over Bluetooth as a headset. Android doesn't let " +
+                                "apps carry call audio themselves.",
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }

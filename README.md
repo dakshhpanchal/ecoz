@@ -136,7 +136,7 @@ The code contains a secret. Do not post it anywhere public.
 
 ### 4. Turn things on
 
-In the app, switch on **Receive from laptop**, and then whichever of **Mirror notifications**, **Tell the laptop when I'm close**, **Let my phone unlock the laptop**, **Texts on the laptop** and **Hotspot for the laptop** you want. You can also add the **ecoz** tile to the phone's Quick Settings to turn it on and off. On the laptop, open **ecoz** from the app grid (or run `ecoz settings`).
+In the app, switch on **Receive from laptop**, and then whichever of **Mirror notifications**, **Tell the laptop when I'm close**, **Let my phone unlock the laptop**, **Texts on the laptop**, **Calls on the laptop** and **Hotspot for the laptop** you want. You can also add the **ecoz** tile to the phone's Quick Settings to turn it on and off. On the laptop, open **ecoz** from the app grid (or run `ecoz settings`).
 
 Try it: share a link from Chrome to *Send to laptop*, copy some text on the laptop and paste it on the phone, or run `ecoz ring`.
 
@@ -148,6 +148,9 @@ Try it: share a link from Chrome to *Send to laptop*, copy some text on the lapt
 | `ecoz send-file a.jpg b.pdf` | Offer files to the phone. It asks first, unless you turned that off there. |
 | `ecoz ring` / `ecoz ring stop` | Find my phone. |
 | `ecoz settings` | The settings window. |
+| `ecoz call <number>` | Dial from the phone. |
+| `ecoz answer`, `ecoz decline`, `ecoz hangup` | Control the phone's current call. The same buttons appear on the incoming call notification. |
+| `ecoz audio [connect]` | Hear calls on the laptop: connects the phone's hands-free audio over Bluetooth, once the two are paired. |
 | `ecoz sms` | Read and answer your phone's texts in a window (switch it on in the app first). |
 | `ecoz hotspot [on\|off\|test]` | When the laptop has no internet and the phone is close, make the phone offer its hotspot switch. `test` pretends to be offline for a minute. |
 | `ecoz confirm [on\|off]` | Ask before accepting files from the phone (default on). |
@@ -184,7 +187,8 @@ ecoz does not replace the mature tools. It aims at one thing: the feel of Apple'
 | Ask before accepting files, per device | yes | not that I know of | no |
 | Notification replies | yes | yes | no |
 | SMS | plain SMS only, no RCS | yes | no |
-| Calls, media control, remote input | not yet | yes | no |
+| Calls | controls, audio over Bluetooth | yes | no |
+| Media control, remote input | not yet | yes | no |
 | Other desktops (KDE, Windows, macOS) | GNOME only for now | yes | yes |
 | Maturity | early | many years | many years |
 
@@ -196,6 +200,7 @@ If you want a proven toolbox, use KDE Connect. If you want the unlock and the on
 - **You build the phone app yourself.** There is no Play Store or F-Droid release yet.
 - **Phone to laptop clipboard needs one tap.** Android stops background apps from reading the clipboard. I tried the known workarounds on an Android 16 phone and they do not work there.
 - **Texts are plain SMS only.** RCS chats ("Chat features") cannot be read by any app, though you can reply to their notifications. Texts you send from the laptop do not show up in the Messages app, because only the default messaging app may write there. Bank and login codes will be visible on the laptop, so leave this off on a shared computer.
+- **Calls: controls, not audio.** The laptop shows who is calling and can answer, decline, hang up and dial. Android does not let apps carry call audio, so hearing the call on the laptop needs the phone paired with it over Bluetooth as a headset (`ecoz audio`). That depends on your laptop's Bluetooth and audio setup, and call quality is phone-call grade.
 - **The hotspot is one tap, not zero.** Android does not let apps switch it on, so the phone shows a notification that opens the switch.
 - **Folders cannot be sent yet,** only files.
 - Tested on **one** setup.
@@ -208,6 +213,7 @@ If you want a proven toolbox, use KDE Connect. If you want the unlock and the on
 - [x] One-tap hotspot when the laptop is near and offline
 - [x] QR-code pairing
 - [x] SMS in a laptop window, and a Quick Settings tile to switch ecoz on and off
+- [x] Phone calls on the laptop (notification, answer, decline, dial; audio over Bluetooth)
 - [ ] Send folders
 - [ ] Release builds: signed APK, F-Droid, `.deb`
 - [ ] KDE Plasma and other desktops, X11

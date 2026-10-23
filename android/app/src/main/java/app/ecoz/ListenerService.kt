@@ -45,6 +45,7 @@ class ListenerService : Service() {
     private var beaconJob: Job? = null
     private lateinit var beacon: Beacon
     private lateinit var hotspotWatcher: HotspotWatcher
+    private lateinit var callWatcher: CallBridge.Watcher
     private lateinit var notifications: NotificationManager
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -73,11 +74,13 @@ class ListenerService : Service() {
         if (beaconJob == null) {
             beacon = Beacon(applicationContext)
             hotspotWatcher = HotspotWatcher(applicationContext)
+            callWatcher = CallBridge.Watcher(applicationContext, scope)
             beaconJob = scope.launch {
                 // Follows the switches in the app, rotates the beacon's tag every 30 seconds, and
                 // listens for the laptop asking for a hotspot while it is out of reach.
                 while (isActive) {
                     val token = store.load()?.token
+                    callWatcher.sync(store.callsEnabled && store.listenEnabled)
                     hotspotWatcher.sync(
                         enabled = store.hotspotHelp && store.listenEnabled, token = token,
                         reachable = ListenerState.status.value.startsWith("Connected"),
@@ -93,6 +96,7 @@ class ListenerService : Service() {
     override fun onDestroy() {
         if (::beacon.isInitialized) beacon.stop()
         if (::hotspotWatcher.isInitialized) hotspotWatcher.stop()
+        if (::callWatcher.isInitialized) callWatcher.stop()
         RingController.stop(this)
         handle.close() // unblocks the read so the loop can exit
         scope.cancel()
@@ -148,6 +152,7 @@ class ListenerService : Service() {
                 "pull" -> showPullRequest(id)
                 "unlock-challenge" -> answerUnlockChallenge(pairing, value)
                 "sms-req" -> answerSmsRequest(pairing, value)
+                "call" -> CallBridge.control(applicationContext, scope, Store(applicationContext), value)
                 "files" -> runCatching { handleFileOffer(JSONObject(value).getJSONArray("files")) }
                 "ring" -> if (value == "start") startRinging() else stopRinging()
                 "notif-action" -> runCatching {
