@@ -131,6 +131,37 @@ object EcozClient {
         return total
     }
 
+    /**
+     * Offers the laptop this phone's unlock public key. The laptop asks its owner, so this can wait up
+     * to the laptop's prompt timeout. Returns whether the owner approved.
+     */
+    fun registerUnlockKey(p: Pairing, publicKeyDer: ByteArray): Pair<Outcome, Boolean> {
+        var accepted = false
+        val outcome = guarded(p) {
+            val conn = connect(p, "POST", "/v1/unlock/register", OFFER_READ_TIMEOUT_MS)
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            val body = JSONObject().put("public_key", android.util.Base64.encodeToString(publicKeyDer, android.util.Base64.NO_WRAP))
+            try {
+                conn.outputStream.use { it.write(body.toString().toByteArray()) }
+                val code = conn.responseCode
+                if (code != 200) return@guarded statusOutcome(p, code)
+                accepted = JSONObject(conn.inputStream.bufferedReader().readText()).optBoolean("accepted")
+                Outcome(true, if (accepted) "Approved" else "Not approved")
+            } finally {
+                conn.disconnect()
+            }
+        }
+        return outcome to accepted
+    }
+
+    /** Sends the signed answer to an unlock challenge. */
+    fun answerUnlock(p: Pairing, nonceB64: String, signature: ByteArray): Outcome = request(
+        p, "POST", "/v1/unlock/response",
+        JSONObject().put("nonce", nonceB64)
+            .put("signature", android.util.Base64.encodeToString(signature, android.util.Base64.NO_WRAP)).toString(),
+    )
+
     fun ack(p: Pairing, eventId: String): Outcome =
         request(p, "POST", "/v1/ack", JSONObject().put("id", eventId).toString())
 

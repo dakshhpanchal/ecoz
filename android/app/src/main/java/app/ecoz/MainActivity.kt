@@ -112,6 +112,9 @@ private fun EcozScreen(store: Store, resumeTick: Int) {
     var mirror by remember { mutableStateOf(store.mirrorNotifications) }
     var confirmFiles by remember { mutableStateOf(store.confirmIncomingFiles) }
     var proximity by remember { mutableStateOf(store.proximityEnabled) }
+    var unlock by remember { mutableStateOf(store.unlockEnabled) }
+    var unlockNote by remember { mutableStateOf<String?>(null) }
+    var unlockBusy by remember { mutableStateOf(false) }
     val nearbyPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
         val ok = granted[Manifest.permission.BLUETOOTH_ADVERTISE] == true
         proximity = ok
@@ -253,6 +256,57 @@ private fun EcozScreen(store: Store, resumeTick: Int) {
                                 "It's also switched on separately on the laptop: run  ecoz proximity on .",
                             style = MaterialTheme.typography.bodySmall,
                         )
+                    }
+                }
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Let my phone unlock the laptop", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    when {
+                                        unlockBusy -> "Waiting for you to approve on the laptop…"
+                                        unlock -> "On: unlocks when this phone is near and unlocked"
+                                        else -> "Off"
+                                    },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                            }
+                            Switch(checked = unlock, enabled = !unlockBusy, onCheckedChange = { on ->
+                                if (!on) {
+                                    unlock = false
+                                    store.unlockEnabled = false
+                                    UnlockKey.delete()
+                                    unlockNote = "Turned off. Run  ecoz unlock forget  on the laptop to remove this phone there too."
+                                } else if (!proximity) {
+                                    unlockNote = "Turn on “Tell the laptop when I'm close” first."
+                                } else {
+                                    unlockBusy = true
+                                    unlockNote = "A question is on the laptop screen. Accept it there."
+                                    scope.launch {
+                                        val (outcome, accepted) = withContext(Dispatchers.IO) {
+                                            EcozClient.registerUnlockKey(paired, UnlockKey.publicKey())
+                                        }
+                                        unlockBusy = false
+                                        unlock = accepted
+                                        store.unlockEnabled = accepted
+                                        if (!accepted) withContext(Dispatchers.IO) { UnlockKey.delete() }
+                                        unlockNote = when {
+                                            accepted -> "Done. Lock the laptop, wake it and keep this phone close and unlocked."
+                                            outcome.ok -> "The laptop didn't approve it, so nothing was turned on."
+                                            else -> outcome.message
+                                        }
+                                    }
+                                }
+                            })
+                        }
+                        Text(
+                            "The laptop unlocks only when this phone is close, the phone itself is unlocked, and " +
+                                "it proves itself with a key kept in its secure hardware, which Android won't use " +
+                                "while the phone is locked. You must also be at the laptop.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        unlockNote?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                     }
                 }
                 Card(modifier = Modifier.fillMaxWidth()) {

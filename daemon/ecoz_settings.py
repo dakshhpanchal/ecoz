@@ -17,36 +17,25 @@ from gi.repository import Adw, Gtk  # noqa: E402
 CONF = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "ecoz"
 
 
-class FlagSwitch(Adw.SwitchRow):
-    """A switch backed by a flag file: the file exists when the setting is OFF."""
+def flag_switch(title, subtitle, flag, on_when_present):
+    """A switch backed by a flag file in ~/.config/ecoz.
 
-    def __init__(self, title, subtitle, flag):
-        super().__init__(title=title, subtitle=subtitle, active=not flag.exists())
-        self._flag = flag
-        self.connect("notify::active", self._changed)
+    [on_when_present] says which way the file reads: for "ask before accepting files" the file's
+    presence means the setting is OFF; for "lock when my phone walks away" its presence means ON.
+    (Adw.SwitchRow can't be subclassed, so this builds a plain row.)
+    """
+    row = Adw.SwitchRow(title=title, subtitle=subtitle, active=flag.exists() == on_when_present)
 
-    def _changed(self, *_):
+    def changed(widget, *_):
         CONF.mkdir(parents=True, exist_ok=True)
-        if self.get_active():
-            self._flag.unlink(missing_ok=True)
+        want_file = widget.get_active() == on_when_present
+        if want_file:
+            flag.touch()
         else:
-            self._flag.touch()
+            flag.unlink(missing_ok=True)
 
-
-class PositiveFlagSwitch(Adw.SwitchRow):
-    """A switch backed by a flag file that exists when the setting is ON (the opposite of FlagSwitch)."""
-
-    def __init__(self, title, subtitle, flag):
-        super().__init__(title=title, subtitle=subtitle, active=flag.exists())
-        self._flag = flag
-        self.connect("notify::active", self._changed)
-
-    def _changed(self, *_):
-        CONF.mkdir(parents=True, exist_ok=True)
-        if self.get_active():
-            self._flag.touch()
-        else:
-            self._flag.unlink(missing_ok=True)
+    row.connect("notify::active", changed)
+    return row
 
 
 class SettingsWindow(Adw.ApplicationWindow):
@@ -54,28 +43,33 @@ class SettingsWindow(Adw.ApplicationWindow):
         super().__init__(application=app, title="ecoz", default_width=520, default_height=560)
 
         files = Adw.PreferencesGroup(title="Files from the phone")
-        files.add(FlagSwitch(
+        files.add(flag_switch(
             "Ask before accepting files",
             "A notification with Accept and Decline appears before anything is saved. "
             "Turn this off to accept files from the phone automatically.",
-            CONF / "confirm-incoming-off"))
+            CONF / "confirm-incoming-off", on_when_present=False))
         note = Gtk.Label(
             label="Whether the phone asks before accepting files from the laptop is set in the ecoz app on the phone.",
             wrap=True, xalign=0, css_classes=["dim-label", "caption"], margin_top=6)
         files.add(note)
 
         clipboard = Adw.PreferencesGroup(title="Clipboard")
-        clipboard.add(FlagSwitch(
+        clipboard.add(flag_switch(
             "Share what I copy with the phone",
             "Text you copy on the laptop appears on the phone's clipboard. Password-manager copies are never sent.",
-            CONF / "clipboard-sync-off"))
+            CONF / "clipboard-sync-off", on_when_present=False))
 
         proximity = Adw.PreferencesGroup(title="Phone proximity")
-        proximity.add(PositiveFlagSwitch(
+        proximity.add(flag_switch(
             "Lock when my phone walks away",
             "Locks the screen about 12 seconds after your phone is clearly out of range, and never while you are "
             "using the laptop. Needs “Tell the laptop when I'm close” turned on in the phone app.",
-            CONF / "autolock-on"))
+            CONF / "autolock-on", on_when_present=True))
+        proximity.add(flag_switch(
+            "Unlock with my phone",
+            "Unlocks the screen when your phone is right next to the laptop, is itself unlocked, and proves it "
+            "with a key kept in its secure hardware. Set up from the ecoz app on the phone first.",
+            CONF / "unlock-on", on_when_present=True))
 
         page = Adw.PreferencesPage()
         page.add(files)

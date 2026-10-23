@@ -137,6 +137,7 @@ class ListenerService : Service() {
                 "text" -> copyText(id, value)
                 "clip" -> if (Store(applicationContext).clipboardSync) ClipboardSync.apply(applicationContext, value)
                 "pull" -> showPullRequest(id)
+                "unlock-challenge" -> answerUnlockChallenge(pairing, value)
                 "files" -> runCatching { handleFileOffer(JSONObject(value).getJSONArray("files")) }
                 "ring" -> if (value == "start") startRinging() else stopRinging()
                 "notif-action" -> runCatching {
@@ -149,6 +150,17 @@ class ListenerService : Service() {
         }
         // Ack even duplicates, otherwise the laptop keeps re-sending them.
         if (id.isNotEmpty()) EcozClient.ack(pairing, id)
+    }
+
+    /**
+     * The laptop is locked, our beacon is close and it asks us to prove it. Sign the challenge with the
+     * hardware key. While the phone is locked Android refuses the key, and then we simply don't answer.
+     */
+    private fun answerUnlockChallenge(pairing: Pairing, nonceB64: String) {
+        if (!Store(applicationContext).unlockEnabled) return
+        val nonce = runCatching { android.util.Base64.decode(nonceB64, android.util.Base64.DEFAULT) }.getOrNull() ?: return
+        val signature = UnlockKey.sign(nonce, pairing.fingerprint) ?: return
+        EcozClient.answerUnlock(pairing, nonceB64, signature)
     }
 
     /** The laptop wants to send files. Ask first, unless this phone's setting says to accept automatically. */

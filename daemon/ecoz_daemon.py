@@ -15,6 +15,8 @@ Receives links/text from the phone over HTTPS on the LAN and opens them here.
   ecoz_daemon.py proximity [on|off] listen for the phone's Bluetooth beacon (needed for lock/unlock; default off)
   ecoz_daemon.py presence           show whether the phone is near, with the signal strength
   ecoz_daemon.py autolock [on|off]  lock the laptop when the phone walks away (default off)
+  ecoz_daemon.py unlock [on|off|forget|status]
+                                    unlock the laptop from the registered phone (default off)
   ecoz_daemon.py ring [stop]        make the phone ring (find my phone)
   ecoz_daemon.py notif-action <key> <index> [text]
                                     press a button on a phone notification (text = reply)
@@ -154,7 +156,7 @@ def autolock_enabled():
 
 def proximity_enabled():
     # anything that needs to know where the phone is also needs the beacon listener
-    return PROXIMITY_ON_FLAG.exists() or autolock_enabled()
+    return PROXIMITY_ON_FLAG.exists() or autolock_enabled() or (CONF / "unlock-on").exists()
 
 
 def clip_sync_enabled():
@@ -264,7 +266,7 @@ class Hub:
             for e in stale:
                 del self._inflight[e["id"]]
         for e in stale:
-            if e.get("type") != "clip":
+            if e.get("type") not in ("clip", "unlock-challenge"):  # stale by the next retry
                 self._deliver(e)
 
     def _deliver(self, event):
@@ -500,6 +502,59 @@ class Offers:
 OFFERS = Offers()
 
 
+class Prompts:
+    """A one-off Accept / Decline question shown as a (critical) desktop notification."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._pending = {}  # desktop notification id -> {"event", "accepted"}
+
+    def ask(self, summary, body, seconds=120):
+        """Blocks until answered. Unanswered, dismissed or undeliverable counts as no."""
+        from gi.repository import GLib
+        prompt = {"event": threading.Event(), "accepted": False}
+        try:
+            reply = PHONE_NOTIFICATIONS._call(
+                "Notify",
+                ("ecoz", 0, "dialog-question-symbolic", GLib.markup_escape_text(summary), GLib.markup_escape_text(body),
+                 ["accept", "Accept", "decline", "Decline"], {"urgency": GLib.Variant("y", 2)}, 0),
+                "(susssasa{sv}i)", "(u)")
+        except Exception as e:
+            print(f"could not show a question: {e}", file=sys.stderr, flush=True)
+            return False
+        desktop_id = reply.unpack()[0]
+        with self._lock:
+            self._pending[desktop_id] = prompt
+        prompt["event"].wait(seconds)
+        with self._lock:
+            self._pending.pop(desktop_id, None)
+        try:
+            PHONE_NOTIFICATIONS._call("CloseNotification", (desktop_id,), "(u)", None)
+        except Exception:
+            pass
+        return prompt["accepted"]
+
+    def action_invoked(self, desktop_id, button_id):
+        with self._lock:
+            prompt = self._pending.get(desktop_id)
+        if prompt is None:
+            return False
+        prompt["accepted"] = button_id == "accept"
+        prompt["event"].set()
+        return True
+
+    def closed(self, desktop_id, reason):
+        with self._lock:
+            prompt = self._pending.get(desktop_id)
+        if prompt is not None and reason == 2:  # swiped away: no
+            prompt["accepted"] = False
+            prompt["event"].set()
+
+
+PROMPTS = Prompts()
+UNLOCKER = None   # the running ecoz_unlock.Unlocker
+
+
 # --- phone notifications mirrored onto the laptop -------------------------------------
 MAX_FIELD = 500
 
@@ -681,12 +736,13 @@ def watch_notification_actions():
 
         def on_signal(_bus, _sender, _path, _iface, _signal, params):
             desktop_id, button_id = params.unpack()
-            if not OFFERS.action_invoked(desktop_id, button_id):  # an Accept/Decline prompt, or...
-                PHONE_NOTIFICATIONS.action_invoked(desktop_id, button_id)  # ...a mirrored phone notification
+            if not (OFFERS.action_invoked(desktop_id, button_id) or PROMPTS.action_invoked(desktop_id, button_id)):
+                PHONE_NOTIFICATIONS.action_invoked(desktop_id, button_id)  # a mirrored phone notification
 
         def on_closed(_bus, _sender, _path, _iface, _signal, params):
             desktop_id, reason = params.unpack()
             OFFERS.closed(desktop_id, reason)
+            PROMPTS.closed(desktop_id, reason)
 
         def on_token(_bus, _sender, _path, _iface, _signal, params):
             desktop_id, token = params.unpack()  # arrives just before ActionInvoked for the same click
@@ -753,6 +809,44 @@ class Handler(BaseHTTPRequestHandler):
 
     def _is_local(self):
         return self.client_address[0] in ("127.0.0.1", "::1")
+
+    def _unlock_register(self):
+        """Phone -> laptop: "this is my public key; may it unlock you?" Needs a yes on the unlocked laptop."""
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= MAX_BODY:
+                raise ValueError("bad length")
+            der = base64.b64decode(json.loads(self.rfile.read(length))["public_key"], validate=True)
+            if UNLOCKER is None:
+                raise ValueError("unlock is not ready")
+            import ecoz_lock
+            if ecoz_lock.screen_is_locked():
+                return self._json(200, {"ok": True, "accepted": False})  # only ever approve while you are at an unlocked laptop
+            UNLOCKER._registration_check(der)  # reject a bad key before bothering the user
+        except (ValueError, KeyError, TypeError):
+            return self._json(400, {"ok": False, "error": "bad request"})
+        accepted = PROMPTS.ask(
+            "Let your phone unlock this laptop?",
+            "While your phone is unlocked and right next to the laptop, it will unlock the screen. "
+            "Accept only if you just turned this on in the ecoz app.")
+        if accepted:
+            UNLOCKER.register(der)
+            print("unlock: phone registered", file=sys.stderr, flush=True)
+        self._json(200, {"ok": True, "accepted": accepted})
+
+    def _unlock_response(self):
+        """Phone -> laptop: the signed answer to a challenge."""
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= MAX_BODY:
+                raise ValueError("bad length")
+            msg = json.loads(self.rfile.read(length))
+            nonce, signature = str(msg["nonce"]), str(msg["signature"])
+        except (ValueError, KeyError, TypeError):
+            return self._json(400, {"ok": False, "error": "bad request"})
+        result = UNLOCKER.answer(nonce, signature) if UNLOCKER else "unlock is not ready"
+        print(f"unlock answer: {result}", file=sys.stderr, flush=True)  # reasons stay in the journal
+        self._json(200, {"ok": True, "unlocked": result == "unlocked"})
 
     def _file_offer(self):
         """Phone -> laptop, step 1: describe the files, wait for the laptop's answer, hand out tickets."""
@@ -931,7 +1025,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         is_decline = self.path.startswith("/v1/file/") and self.path.endswith("/decline")
         if not is_decline and self.path not in ("/v1/handoff", "/v1/push", "/v1/ack", "/v1/notification",
-                                                "/v1/notification/dismiss", "/v1/file", "/v1/file/offer"):
+                                                "/v1/notification/dismiss", "/v1/file", "/v1/file/offer",
+                                                "/v1/unlock/register", "/v1/unlock/response"):
             return self._json(404, {"ok": False})
         if not self._authed():
             return self._json(401, {"ok": False, "error": "unauthorized"})
@@ -946,6 +1041,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._receive_file()
         if self.path == "/v1/file/offer":
             return self._file_offer()
+        if self.path == "/v1/unlock/register":
+            return self._unlock_register()
+        if self.path == "/v1/unlock/response":
+            return self._unlock_response()
         if self.path.startswith("/v1/notification"):
             return self._phone_notification(dismiss=self.path.endswith("/dismiss"))
         try:
@@ -1052,12 +1151,43 @@ def autolock_loop():
         time.sleep(1)
 
 
+def unlock_session():
+    """Unlock this user's graphical session. Works from a service; it needs no password for your own session."""
+    user_session = subprocess.run(["loginctl", "show-user", str(os.getuid()), "-p", "Display", "--value"],
+                                  capture_output=True, text=True).stdout.strip() or os.environ.get("XDG_SESSION_ID", "")
+    if user_session:
+        subprocess.run(["loginctl", "unlock-session", user_session], check=False)
+
+
+def send_unlock_challenge(nonce_b64):
+    HUB.publish({"type": "unlock-challenge", "value": nonce_b64}, queue_offline=False)
+
+
+def unlock_loop():
+    """Once a second, let ecoz_unlock decide whether to ask the phone to prove itself."""
+    global UNLOCKER
+    import ecoz_lock
+    import ecoz_unlock
+    UNLOCKER = ecoz_unlock.Unlocker(
+        CONF, fingerprint(), presence=lambda: PRESENCE.snapshot() if PRESENCE else None,
+        is_locked=ecoz_lock.screen_is_locked, idle_seconds=ecoz_lock.idle_seconds, do_unlock=unlock_session,
+        send_challenge=send_unlock_challenge, log=lambda msg: print(f"unlock: {msg}", file=sys.stderr, flush=True))
+    while True:
+        try:
+            if UNLOCKER.enabled():
+                UNLOCKER.tick()
+        except Exception as e:
+            print(f"unlock error: {e}", file=sys.stderr, flush=True)
+        time.sleep(1)
+
+
 def presence_supervisor(token):
     """Start or stop Bluetooth scanning as the user switches proximity on and off."""
     global PRESENCE
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import ecoz_presence
     threading.Thread(target=autolock_loop, daemon=True, name="autolock").start()
+    threading.Thread(target=unlock_loop, daemon=True, name="unlock").start()
     while True:
         wanted = proximity_enabled()
         if wanted and PRESENCE is None:
@@ -1160,6 +1290,26 @@ def autolock_setting(args):
     elif args:
         sys.exit("usage: ecoz_daemon.py autolock [on|off]")
     report(f"Locking when the phone walks away is {'on' if autolock_enabled() else 'off'}.")
+
+
+def unlock_setting(args):
+    flag = CONF / "unlock-on"
+    key = CONF / "unlock-key.der"
+    action = args[0] if args else "status"
+    if action == "on":
+        if not key.exists():
+            return report("No phone is registered yet. Turn it on in the ecoz app on the phone and accept the "
+                          "question that appears here.", failed=True)
+        flag.touch()
+    elif action == "off":
+        flag.unlink(missing_ok=True)
+    elif action == "forget":
+        flag.unlink(missing_ok=True)
+        key.unlink(missing_ok=True)
+    elif action != "status":
+        sys.exit("usage: ecoz_daemon.py unlock [on|off|forget|status]")
+    report(f"Unlocking from the phone is {'on' if flag.exists() and key.exists() else 'off'}; "
+           f"phone key: {'registered' if key.exists() else 'none'}.")
 
 
 def show_presence():
@@ -1297,6 +1447,8 @@ def main():
         show_presence()
     elif cmd == "autolock":
         autolock_setting(sys.argv[2:])
+    elif cmd == "unlock":
+        unlock_setting(sys.argv[2:])
     elif cmd == "settings":
         open_settings()
     elif cmd == "pair":

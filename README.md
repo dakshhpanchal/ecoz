@@ -72,6 +72,24 @@ weak (below -82 dBm) for 12 seconds, never while you are using the machine (idle
 re-arms only once the phone has been near again, so a dead phone or a hand-unlocked session is
 never locked out from under you. All of this is off by default.
 
+### Unlock with the phone
+
+    ecoz unlock status                 # on/off and whether a phone key is registered
+    ecoz unlock off | on | forget      # pause, resume, or remove the phone's key
+
+Turn on "Let my phone unlock the laptop" in the app, then accept the question that appears on the
+(unlocked) laptop. The phone creates an EC P-256 key in its secure hardware, marked usable only
+while the phone is unlocked, and gives the laptop just the public half. When the laptop is locked
+it unlocks only if all of these hold, checked again when the phone answers: the phone's beacon is
+strong (about a metre or two) and fresh; someone touched the laptop in the last 15 seconds; and the
+phone signs a fresh random challenge, which also names this laptop's certificate fingerprint, so an
+answer is good once, for one laptop, for a few seconds. A locked phone cannot answer.
+
+Limits: relaying the phone's Bluetooth beacon plus an unlocked phone answering would unlock it, and
+anyone who touches the laptop while you stand next to it with an unlocked phone finds it unlocked.
+A phone in your pocket is normally locked, so it only works while the phone is unlocked (Android's
+Extend Unlock keeps it unlocked while carried).
+
 Phone notifications are mirrored to the laptop when "Mirror notifications" is on and
 notification access is granted (Settings, or `adb shell cmd notification allow_listener
 app.ecoz/app.ecoz.NotificationMirrorService`). Ongoing, silent and private notifications are

@@ -51,6 +51,11 @@ class Store(context: Context) {
         get() = prefs.getBoolean("listen", false)
         set(value) = prefs.edit().putBoolean("listen", value).apply()
 
+    /** This phone may answer the laptop's unlock challenges. Needs the laptop to have approved its key. */
+    var unlockEnabled: Boolean
+        get() = prefs.getBoolean("unlock", false)
+        set(value) = prefs.edit().putBoolean("unlock", value).apply()
+
     /** Broadcast the proximity beacon (for lock/unlock and hotspot help). Off until the user turns it on. */
     var proximityEnabled: Boolean
         get() = prefs.getBoolean("proximity", false)
