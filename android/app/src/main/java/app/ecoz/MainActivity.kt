@@ -163,8 +163,9 @@ private fun EcozScreen(store: Store, resumeTick: Int) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("How to use", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "In Chrome, YouTube, Maps or any app, tap Share and choose “Send to laptop”. " +
-                                "The link opens on your laptop.",
+                            "In any app, tap Share and choose “Send to laptop”. A link opens on your laptop; " +
+                                "a photo, video or file goes to its Downloads folder. To send from the laptop, " +
+                                "use  ecoz send-file  or right-click a file and choose Send to Phone.",
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     }

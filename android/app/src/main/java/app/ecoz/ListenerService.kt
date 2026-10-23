@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -51,7 +52,14 @@ class ListenerService : Service() {
             this, FOREGROUND_ID, foregroundNotification("Connecting…"),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
         )
-        if (job == null) job = scope.launch { connectLoop() }
+        val store = Store(applicationContext)
+        if (intent?.action == ACTION_UPLOAD) {
+            val uris = (0 until (intent.clipData?.itemCount ?: 0)).mapNotNull { intent.clipData?.getItemAt(it)?.uri }
+            // If the user hasn't turned on "Receive from laptop", this service exists only for the upload.
+            Transfers.onIdle = { if (!store.listenEnabled) stopSelf() }
+            Transfers.upload(applicationContext, scope, store, uris)
+        }
+        if (job == null && store.listenEnabled) job = scope.launch { connectLoop() }
         return START_STICKY
     }
 
@@ -109,6 +117,11 @@ class ListenerService : Service() {
                 "text" -> copyText(id, value)
                 "clip" -> if (Store(applicationContext).clipboardSync) ClipboardSync.apply(applicationContext, value)
                 "pull" -> showPullRequest(id)
+                "file" -> runCatching {
+                    val offer = JSONObject(value)
+                    Transfers.receive(applicationContext, scope, Store(applicationContext),
+                        offer.getString("id"), offer.getString("name"), offer.getLong("size"))
+                }
                 "ring" -> if (value == "start") startRinging() else stopRinging()
                 "notif-action" -> runCatching {
                     val action = JSONObject(value)
@@ -235,12 +248,17 @@ class ListenerService : Service() {
         notifications.createNotificationChannel(
             NotificationChannel(CHANNEL_ALARM, "Find my phone", NotificationManager.IMPORTANCE_HIGH)
         )
+        notifications.createNotificationChannel(
+            NotificationChannel(CHANNEL_TRANSFER, "File transfers", NotificationManager.IMPORTANCE_LOW)
+        )
     }
 
     companion object {
         private const val CHANNEL_SERVICE = "service"
         private const val CHANNEL_INCOMING = "incoming"
         private const val CHANNEL_ALARM = "alarm"
+        const val CHANNEL_TRANSFER = "transfers"
+        const val ACTION_UPLOAD = "app.ecoz.UPLOAD"
         private const val ACTION_STOP_RING = "app.ecoz.STOP_RING"
         private const val RING_ID = 2
         private const val RING_MAX_MS = 60_000L
@@ -253,6 +271,18 @@ class ListenerService : Service() {
 
         fun start(context: Context) {
             context.startForegroundService(Intent(context, ListenerService::class.java))
+        }
+
+        /** Sends shared files to the laptop; runs in this service so a big transfer outlives the share sheet. */
+        fun upload(context: Context, uris: List<Uri>) {
+            val clip = ClipData.newRawUri("files", uris.first()).also { c -> uris.drop(1).forEach { c.addItem(ClipData.Item(it)) } }
+            context.startForegroundService(
+                Intent(context, ListenerService::class.java).apply {
+                    action = ACTION_UPLOAD
+                    clipData = clip
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+            )
         }
 
         fun stop(context: Context) {

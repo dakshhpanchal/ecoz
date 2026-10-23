@@ -2,6 +2,9 @@ package app.ecoz
 
 import org.json.JSONObject
 import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
+import java.net.URLEncoder
 import java.net.ConnectException
 import java.net.NoRouteToHostException
 import java.net.SocketTimeoutException
@@ -33,6 +36,7 @@ class StreamHandle {
 object EcozClient {
     private const val CONNECT_TIMEOUT_MS = 4_000
     private const val READ_TIMEOUT_MS = 6_000
+    private const val COPY_BUFFER_BYTES = 64 * 1024
 
     /** The laptop sends a keepalive every 15 s; silence for 45 s means the link is dead. */
     private const val STREAM_READ_TIMEOUT_MS = 45_000
@@ -43,6 +47,49 @@ object EcozClient {
         request(p, "POST", "/v1/handoff", JSONObject().put("type", type).put("value", value).toString())
 
     fun post(p: Pairing, path: String, body: JSONObject): Outcome = request(p, "POST", path, body.toString())
+
+    /** Streams [source] (exactly [size] bytes) to the laptop's receive folder. */
+    fun upload(p: Pairing, name: String, size: Long, source: InputStream, onProgress: (Long) -> Unit): Outcome =
+        guarded(p) {
+            val conn = connect(p, "POST", "/v1/file", STREAM_READ_TIMEOUT_MS)
+            conn.doOutput = true
+            conn.setFixedLengthStreamingMode(size) // streams without buffering the whole file in memory
+            conn.setRequestProperty("Content-Type", "application/octet-stream")
+            conn.setRequestProperty("X-Ecoz-Name", URLEncoder.encode(name, "UTF-8").replace("+", "%20"))
+            try {
+                conn.outputStream.use { out -> copy(source, out, onProgress) }
+                statusOutcome(p, conn.responseCode)
+            } finally {
+                conn.disconnect()
+            }
+        }
+
+    /** Streams a file the laptop offered into [sink]; checks that all [expectedSize] bytes arrived. */
+    fun download(p: Pairing, fileId: String, expectedSize: Long, sink: OutputStream, onProgress: (Long) -> Unit): Outcome =
+        guarded(p) {
+            val conn = connect(p, "GET", "/v1/file/${URLEncoder.encode(fileId, "UTF-8")}", STREAM_READ_TIMEOUT_MS)
+            try {
+                val code = conn.responseCode
+                if (code != 200) return@guarded statusOutcome(p, code)
+                val received = conn.inputStream.use { input -> copy(input, sink, onProgress) }
+                if (received != expectedSize) Outcome(false, "The file arrived incomplete.") else Outcome(true, "Received")
+            } finally {
+                conn.disconnect()
+            }
+        }
+
+    private fun copy(input: InputStream, output: OutputStream, onProgress: (Long) -> Unit): Long {
+        val buffer = ByteArray(COPY_BUFFER_BYTES)
+        var total = 0L
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) break
+            output.write(buffer, 0, read)
+            total += read
+            onProgress(total)
+        }
+        return total
+    }
 
     fun ack(p: Pairing, eventId: String): Outcome =
         request(p, "POST", "/v1/ack", JSONObject().put("id", eventId).toString())
@@ -99,7 +146,9 @@ object EcozClient {
     private fun statusOutcome(p: Pairing, code: Int): Outcome = when (code) {
         200 -> Outcome(true, "Sent to ${p.name}")
         401 -> Outcome(false, "Laptop rejected the pairing. Pair again.")
-        400 -> Outcome(false, "Laptop refused that link.")
+        400 -> Outcome(false, "Laptop refused that.")
+        404 -> Outcome(false, "That file is no longer available on the laptop.")
+        507 -> Outcome(false, "Not enough free space on the laptop.")
         else -> Outcome(false, "Laptop answered $code.")
     }
 

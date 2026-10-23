@@ -22,6 +22,7 @@ For everyday use, link the wrapper onto your PATH:
     ecoz send                        # whatever is on the clipboard
     ecoz sync off                    # pause automatic clipboard sync (on to resume)
     ecoz ring                        # find my phone: alarm at full volume (ecoz ring stop)
+    ecoz send-file photo.jpg doc.pdf # offer files; the phone pulls them into its Downloads
 
 Clipboard sync needs the GSConnect GNOME extension, whose clipboard bridge ecoz uses to read
 and write the Wayland clipboard. Anything you copy on the laptop lands on the phone's
@@ -34,6 +35,17 @@ clipboard automatically (password-manager copies and anything over 64 KB are ski
 
 Open the app, paste the pairing code, then use Share → "Send to laptop". Turn on
 "Receive from laptop" to get items and clipboard changes pushed from the laptop.
+
+To send files from Files (Nautilus), link the script in and right-click → Scripts → Send to Phone:
+
+    ln -s "$PWD/integrations/nautilus/Send to Phone" ~/.local/share/nautilus/scripts/
+
+Files from the phone arrive in `~/Downloads` (set `ECOZ_RECEIVE_DIR` to change it): share any
+file from any app to "Send to laptop". Transfers stream over the same pinned-TLS link, so size is
+limited only by free disk space (512 MiB is always kept free). A file is written under a hidden
+temporary name and renamed when complete, names are reduced to a plain base name (duplicates get
+"(1)"), and only a process on the laptop itself can offer a file to the phone. Folders aren't
+supported yet.
 
 Phone notifications are mirrored to the laptop when "Mirror notifications" is on and
 notification access is granted (Settings, or `adb shell cmd notification allow_listener

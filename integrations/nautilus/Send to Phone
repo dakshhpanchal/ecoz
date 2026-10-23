@@ -1,0 +1,5 @@
+#!/bin/sh
+# Files (Nautilus) script: right-click files -> Scripts -> Send to Phone.
+# Nautilus passes the selection, one path per line, in NAUTILUS_SCRIPT_SELECTED_FILE_PATHS.
+[ -n "$NAUTILUS_SCRIPT_SELECTED_FILE_PATHS" ] || exit 0
+printf '%s' "$NAUTILUS_SCRIPT_SELECTED_FILE_PATHS" | xargs -d '\n' "$HOME/.local/bin/ecoz" send-file

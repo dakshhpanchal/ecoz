@@ -9,6 +9,7 @@ Receives links/text from the phone over HTTPS on the LAN and opens them here.
                                     (no argument: sends the current clipboard)
   ecoz_daemon.py pull               ask the phone to send its clipboard here
   ecoz_daemon.py sync [on|off]      show or switch automatic clipboard sync
+  ecoz_daemon.py send-file <path>... send files to the phone (it pulls them over the secure link)
   ecoz_daemon.py ring [stop]        make the phone ring (find my phone)
   ecoz_daemon.py notif-action <key> <index> [text]
                                     press a button on a phone notification (text = reply)
@@ -23,6 +24,7 @@ import http.client
 import json
 import os
 import queue
+import shutil
 import re
 import secrets
 import socket
@@ -33,7 +35,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 PORT = int(os.environ.get("ECOZ_PORT", "8765"))
 CONF = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "ecoz"
@@ -41,6 +43,9 @@ CERT, KEY, TOKEN_FILE = CONF / "cert.pem", CONF / "key.pem", CONF / "token"
 MAX_BODY = 64 * 1024
 MAX_NOTIFICATION_BODY = 768 * 1024  # notifications may carry an app icon and a picture
 MAX_IMAGE = 400 * 1024
+FILE_CHUNK = 1 << 20           # 1 MiB per read/write while streaming files
+MIN_FREE_BYTES = 512 << 20     # never fill the disk: keep at least 512 MiB free
+FILE_STALL_SECONDS = 60        # give up on a transfer that stops moving
 CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "ecoz" / "notifications"
 GSCONNECT_CLIPBOARD = "org.gnome.Shell.Extensions.GSConnect.Clipboard"
 GSCONNECT_CLIPBOARD_PATH = "/org/gnome/Shell/Extensions/GSConnect/Clipboard"
@@ -255,6 +260,90 @@ class Hub:
 HUB = Hub()
 
 
+# --- file transfer -----------------------------------------------------------------
+def receive_dir():
+    """Where files from the phone land: ~/Downloads (or the XDG download folder)."""
+    override = os.environ.get("ECOZ_RECEIVE_DIR")
+    if override:
+        return Path(override)
+    try:
+        found = subprocess.run(["xdg-user-dir", "DOWNLOAD"], capture_output=True, text=True, timeout=3).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        found = ""
+    return Path(found) if found and found != str(Path.home()) else Path.home() / "Downloads"
+
+
+def safe_filename(raw):
+    """A file name from the other device, reduced to a plain base name that is safe to create."""
+    name = unquote(raw or "").replace("\\", "/").split("/")[-1]
+    name = "".join(c for c in name if c.isprintable() and c not in '<>:"|?*').strip(" .")
+    if not name or name in (".", ".."):
+        return "file"
+    if len(name) > 200:  # keep the extension when shortening
+        stem, dot, ext = name.rpartition(".")
+        name = stem[:200 - len(ext) - 1] + "." + ext if dot and 0 < len(ext) <= 12 else name[:200]
+    return name
+
+
+def unique_path(directory, name):
+    """directory/name, or 'name (1).ext', 'name (2).ext'... if that already exists."""
+    candidate = directory / name
+    stem, dot, ext = name.rpartition(".")
+    if not dot or not stem:
+        stem, ext = name, ""
+    else:
+        ext = "." + ext
+    n = 1
+    while candidate.exists():
+        candidate = directory / f"{stem} ({n}){ext}"
+        n += 1
+    return candidate
+
+
+def human_size(n):
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+
+
+class Outbox:
+    """Files the laptop has offered to the phone, served only to the authenticated phone."""
+    TTL = 7200  # an offer expires after two hours
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._files = {}  # id -> {"path", "name", "size", "expires"}
+
+    def add(self, path):
+        real = os.path.realpath(os.path.expanduser(path))
+        if not (os.path.isfile(real) and os.access(real, os.R_OK)):
+            raise ValueError("not a readable file")
+        # the name you picked, not the symlink target's
+        info = {"path": real, "name": safe_filename(os.path.basename(os.path.abspath(os.path.expanduser(path)))),
+                "size": os.path.getsize(real),
+                "expires": time.time() + self.TTL}
+        file_id = secrets.token_urlsafe(16)
+        with self._lock:
+            now = time.time()
+            for stale in [k for k, v in self._files.items() if v["expires"] < now]:
+                del self._files[stale]
+            self._files[file_id] = info
+        return file_id, info
+
+    def get(self, file_id):
+        with self._lock:
+            info = self._files.get(file_id)
+            return info if info and info["expires"] > time.time() else None
+
+    def done(self, file_id):
+        with self._lock:
+            self._files.pop(file_id, None)
+
+
+OUTBOX = Outbox()
+
+
 # --- phone notifications mirrored onto the laptop -------------------------------------
 MAX_FIELD = 500
 
@@ -459,6 +548,9 @@ def check_item(kind, value, allowed=("url", "text")):
         return "empty clipboard"
     if kind == "ring" and value not in ("start", "stop"):
         return "bad ring command"
+    if kind == "file":
+        if not value or len(value) > 4096 or "\0" in value:
+            return "bad file path"
     if kind == "notif-action":
         try:
             action = json.loads(value)
@@ -491,6 +583,82 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _is_local(self):
+        return self.client_address[0] in ("127.0.0.1", "::1")
+
+    def _receive_file(self):
+        """Phone -> laptop: stream the request body to a file in the receive folder."""
+        try:
+            length = int(self.headers.get("Content-Length", ""))
+        except ValueError:
+            return self._json(411, {"ok": False, "error": "length required"})
+        if length < 0:
+            return self._json(400, {"ok": False, "error": "bad length"})
+        name = safe_filename(self.headers.get("X-Ecoz-Name"))
+        folder = receive_dir()
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            if length > shutil.disk_usage(folder).free - MIN_FREE_BYTES:
+                return self._json(507, {"ok": False, "error": "not enough disk space"})
+            final = unique_path(folder, name)
+            part = folder / f".{final.name}.ecoz-part"
+            self.connection.settimeout(FILE_STALL_SECONDS)
+            remaining = length
+            try:
+                with open(part, "wb") as out:
+                    while remaining:
+                        chunk = self.rfile.read(min(FILE_CHUNK, remaining))
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                        remaining -= len(chunk)
+                if remaining:
+                    raise OSError("connection ended early")
+                final = unique_path(folder, name)  # re-check: another transfer may have taken the name
+                os.replace(part, final)
+            except OSError:
+                part.unlink(missing_ok=True)  # never leave a half file behind
+                raise
+        except OSError as e:
+            print(f"receive failed: {e}", file=sys.stderr, flush=True)
+            return self._json(400, {"ok": False, "error": "transfer failed"})
+        notify("Received from phone", f"{final.name}  ({human_size(length)})")
+        self._json(200, {"ok": True, "name": final.name})
+
+    def _send_file(self, file_id):
+        """Laptop -> phone: serve a file the laptop offered (with Range support for resuming)."""
+        info = OUTBOX.get(file_id)
+        if not info:
+            return self._json(404, {"ok": False, "error": "no such file (expired or already delivered)"})
+        size, start = info["size"], 0
+        match = re.fullmatch(r"bytes=(\d+)-", self.headers.get("Range", ""))
+        if match:
+            start = int(match.group(1))
+            if start >= size:
+                return self._json(416, {"ok": False, "error": "range not satisfiable"})
+        try:
+            with open(info["path"], "rb") as source:
+                self.send_response(206 if start else 200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Length", str(size - start))
+                if start:
+                    self.send_header("Content-Range", f"bytes {start}-{size - 1}/{size}")
+                self.end_headers()
+                source.seek(start)
+                self.connection.settimeout(FILE_STALL_SECONDS)
+                sent = start
+                while sent < size:
+                    chunk = source.read(FILE_CHUNK)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    sent += len(chunk)
+        except OSError:
+            return  # phone went away; the offer stays so it can retry or resume
+        if sent >= size:
+            OUTBOX.done(file_id)
+            notify("Sent to phone", f"{info['name']}  ({human_size(size)})")
+
     def _authed(self):
         got = self.headers.get("Authorization", "")
         want = f"Bearer {self.token}"
@@ -517,6 +685,10 @@ class Handler(BaseHTTPRequestHandler):
             HUB.unsubscribe(q)  # unacked events are re-sent by Hub.reap()
 
     def do_GET(self):
+        if self.path.startswith("/v1/file/"):
+            if not self._authed():
+                return self._json(401, {"ok": False})
+            return self._send_file(self.path[len("/v1/file/"):])
         if self.path not in ("/v1/ping", "/v1/events"):
             return self._json(404, {"ok": False})
         if not self._authed():
@@ -549,10 +721,13 @@ class Handler(BaseHTTPRequestHandler):
         self._json(200, {"ok": True})
 
     def do_POST(self):
-        if self.path not in ("/v1/handoff", "/v1/push", "/v1/ack", "/v1/notification", "/v1/notification/dismiss"):
+        if self.path not in ("/v1/handoff", "/v1/push", "/v1/ack", "/v1/notification",
+                             "/v1/notification/dismiss", "/v1/file"):
             return self._json(404, {"ok": False})
         if not self._authed():
             return self._json(401, {"ok": False, "error": "unauthorized"})
+        if self.path == "/v1/file":
+            return self._receive_file()
         if self.path.startswith("/v1/notification"):
             return self._phone_notification(dismiss=self.path.endswith("/dismiss"))
         try:
@@ -568,10 +743,23 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"ok": False, "error": "bad request"})
 
         # "pull" (ask the phone for its clipboard) only makes sense laptop -> phone
-        allowed = ("url", "text", "pull", "clip", "ring", "notif-action") if self.path == "/v1/push" else ("url", "text", "clip")
+        allowed = ("url", "text", "pull", "clip", "ring", "notif-action", "file") if self.path == "/v1/push" else ("url", "text", "clip")
         error = check_item(kind, value, allowed)
         if error:
             return self._json(400, {"ok": False, "error": error})
+
+        if self.path == "/v1/push" and kind == "file":
+            # The token is shared with the phone, so only a process on this laptop may offer a
+            # path; otherwise the phone could ask for any file it can name.
+            if not self._is_local():
+                return self._json(403, {"ok": False, "error": "file offers are local only"})
+            try:
+                file_id, info = OUTBOX.add(value)
+            except ValueError as e:
+                return self._json(400, {"ok": False, "error": str(e)})
+            offer = json.dumps({"id": file_id, "name": info["name"], "size": info["size"]})
+            return self._json(200, {"ok": True, "name": info["name"], "size": info["size"],
+                                    "status": HUB.publish({"type": "file", "value": offer})})
 
         if self.path == "/v1/push":  # laptop -> phone
             # a ring request is pointless minutes later, so it is never queued for a reconnect
@@ -706,6 +894,29 @@ def notification_action(args):
     push("notif-action", json.dumps(action))
 
 
+def send_files(args):
+    """CLI: offer files to the phone. It downloads them over the secure link."""
+    if not args:
+        sys.exit("usage: ecoz_daemon.py send-file <path>...")
+    sent, problems = [], []
+    for raw in args:
+        path = os.path.abspath(os.path.expanduser(raw))
+        if os.path.isdir(path):
+            problems.append(f"{os.path.basename(path)}: folders aren't supported yet")
+            continue
+        outcome = push_raw("file", path)
+        if outcome is None:
+            problems.append(f"{os.path.basename(path)}: couldn't be sent")
+        else:
+            sent.append(outcome)
+    if sent:
+        names = ", ".join(f"{b['name']} ({human_size(b['size'])})" for b in sent[:3]) + (" ..." if len(sent) > 3 else "")
+        online = all(b["status"] == "delivered" for b in sent)
+        report(f"Offered to the phone: {names}" if online else f"Phone not connected; it will fetch them when it is: {names}")
+    for problem in problems:
+        report(problem, failed=not sent)
+
+
 def ring_phone(args):
     """CLI: make the phone ring so you can find it; `ring stop` silences it."""
     if args and args[0] not in ("stop", "start"):
@@ -718,7 +929,8 @@ def pull_from_phone():
     push("pull", "")
 
 
-def push(kind, value):
+def push_raw(kind, value):
+    """POST to the running service; returns its JSON reply, or None if it refused."""
     ctx = ssl.create_default_context(cafile=str(CERT))  # trust only our own certificate
     ctx.check_hostname = False
     conn = http.client.HTTPSConnection("127.0.0.1", PORT, context=ctx, timeout=5)
@@ -729,8 +941,13 @@ def push(kind, value):
         body = json.loads(resp.read() or b"{}")
     except OSError as e:
         report(f"service not reachable ({e}); is ecoz.service running?", failed=True)
-    if resp.status != 200:
-        report(f"refused: {body.get('error', resp.status)}", failed=True)
+    return body if resp.status == 200 else None
+
+
+def push(kind, value):
+    body = push_raw(kind, value)
+    if body is None:
+        report("The service refused that.", failed=True)
     if kind == "notif-action":
         if body["status"] != "delivered":
             report("Phone isn't connected, so that didn't go through.", failed=True)
@@ -755,6 +972,8 @@ def main():
         pull_from_phone()
     elif cmd == "ring":
         ring_phone(sys.argv[2:])
+    elif cmd == "send-file":
+        send_files(sys.argv[2:])
     elif cmd == "notif-action":
         notification_action(sys.argv[2:])
     elif cmd == "sync":
