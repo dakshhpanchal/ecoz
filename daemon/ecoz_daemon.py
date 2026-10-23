@@ -317,6 +317,13 @@ def human_size(n):
         n /= 1024
 
 
+def log_speed(verb, nbytes, seconds):
+    """One line per transfer in the journal: size and throughput, never names."""
+    if nbytes >= 1 << 20 and seconds > 0:
+        print(f"{verb} {human_size(nbytes)} in {seconds:.1f}s = {nbytes / seconds / (1 << 20):.1f} MB/s",
+              file=sys.stderr, flush=True)
+
+
 class Outbox:
     """Files the laptop has offered to the phone, served only to the authenticated phone."""
     TTL = 7200  # an offer expires after two hours
@@ -778,6 +785,7 @@ class Handler(BaseHTTPRequestHandler):
             part = folder / f".{final.name}.ecoz-part"
             self.connection.settimeout(FILE_STALL_SECONDS)
             remaining = length
+            began = time.monotonic()
             try:
                 with open(part, "wb") as out:
                     while remaining:
@@ -797,6 +805,7 @@ class Handler(BaseHTTPRequestHandler):
             print(f"receive failed: {e}", file=sys.stderr, flush=True)
             OFFERS.finished(info, False)
             return self._json(400, {"ok": False, "error": "transfer failed"})
+        log_speed("received", length, time.monotonic() - began)
         OFFERS.finished(info, True)
         self._json(200, {"ok": True, "name": final.name})
 
@@ -822,6 +831,7 @@ class Handler(BaseHTTPRequestHandler):
                 source.seek(start)
                 self.connection.settimeout(FILE_STALL_SECONDS)
                 sent = start
+                began = time.monotonic()
                 while sent < size:
                     chunk = source.read(FILE_CHUNK)
                     if not chunk:
@@ -831,6 +841,7 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             return  # phone went away; the offer stays so it can retry or resume
         if sent >= size:
+            log_speed("sent", size - start, time.monotonic() - began)
             OUTBOX.done(file_id)
             notify("Sent to phone", f"{info['name']}  ({human_size(size)})")
 
