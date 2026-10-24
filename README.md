@@ -202,6 +202,7 @@ If you want a proven toolbox, use KDE Connect. If you want the unlock and the on
 - **Texts are plain SMS only.** RCS chats ("Chat features") cannot be read by any app, though you can reply to their notifications. Texts you send from the laptop do not show up in the Messages app, because only the default messaging app may write there. Bank and login codes will be visible on the laptop, so leave this off on a shared computer.
 - **Calls: controls, not audio.** The laptop shows who is calling and can answer, decline, hang up and dial. Android does not let apps carry call audio, so hearing the call on the laptop needs the phone paired with it over Bluetooth as a headset (`ecoz audio`). That depends on your laptop's Bluetooth and audio setup, and call quality is phone-call grade.
 - **The hotspot is one tap, not zero.** Android does not let apps switch it on, so the phone shows a notification that opens the switch.
+- **Unlock only works on a locked screen.** At the login screen (after a shutdown or a logout) you still type your password, because no ecoz service is running before you log in.
 - **Folders cannot be sent yet,** only files.
 - Tested on **one** setup.
 
