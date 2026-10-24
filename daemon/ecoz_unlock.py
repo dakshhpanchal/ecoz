@@ -24,7 +24,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
-UNLOCK_DBM = -60            # the phone must read stronger than this (about a metre or two away)
+UNLOCK_DBM = -68            # the phone must read stronger than this (within a few metres, in the same room)
 FRESH_SIGNAL_SECONDS = 3    # ...and the beacon must have been heard this recently
 ACTIVITY_SECONDS = 15       # the laptop must have been touched this recently to start a challenge (time to unlock the phone)
 ANSWER_ACTIVITY_SECONDS = 20  # and recently enough when the answer arrives
@@ -49,6 +49,7 @@ class Unlocker:
         self._do_unlock, self._send, self._log = do_unlock, send_challenge, log
         self._pending = {}   # nonce bytes -> issued-at
         self._last_sent = None
+        self._last_reason = None  # the last reason logged for declining, so the log isn't repeated every second
 
     # ---- the registered phone key --------------------------------------------------------
     def registered(self):
@@ -101,8 +102,14 @@ class Unlocker:
         now = time.monotonic() if now is None else now
         for nonce in [n for n, t in self._pending.items() if now - t > CHALLENGE_SECONDS]:
             del self._pending[nonce]
-        if self._blocked(ACTIVITY_SECONDS) is not None:
+        reason = self._blocked(ACTIVITY_SECONDS)
+        if reason is not None:
+            # say why, once per change, while the laptop is locked and unlocking is switched on
+            if reason not in ("off or no phone registered", "not locked") and reason != self._last_reason:
+                self._log(f"not unlocking: {reason}")
+            self._last_reason = reason
             return None
+        self._last_reason = None
         if self._last_sent is not None and now - self._last_sent < RESEND_SECONDS:
             return None
         if len(self._pending) >= MAX_PENDING:
