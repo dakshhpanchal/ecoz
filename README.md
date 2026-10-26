@@ -31,7 +31,7 @@ ecoz is a small pair of apps, one for a Linux laptop and one for an Android phon
     <td width="50%" valign="middle">
       <h3>Files, with a yes or no first</h3>
       <p>Send photos, videos or anything else in both directions. Right-click a file in Files and choose <b>Send to Phone</b>, or share from the phone to <b>Send to laptop</b>.</p>
-      <p>Every incoming file shows <b>Accept</b> or <b>Decline</b> before any data moves, and each device has its own switch. About 45 to 55 MB/s over a 5 GHz hotspot.</p>
+      <p>Every incoming file shows <b>Accept</b> or <b>Decline</b> before any data moves, and each device has its own switch. A progress window shows it arriving, and the notification at the end has <b>Open</b> and <b>Show in Folder</b>. You choose the save folder in the settings. About 45 to 55 MB/s over a 5 GHz hotspot.</p>
     </td>
   </tr>
   <tr>
@@ -151,6 +151,7 @@ Try it: share a link from Chrome to *Send to laptop*, copy some text on the lapt
 | `ecoz call <number>` | Dial from the phone. |
 | `ecoz answer`, `ecoz decline`, `ecoz hangup` | Control the phone's current call. The same buttons appear on the incoming call notification. |
 | `ecoz audio [connect]` | Hear calls on the laptop: connects the phone's hands-free audio over Bluetooth, once the two are paired. |
+| `ecoz folder [path\|reset]` | Show or choose where files from the phone are saved (also in `ecoz settings`). |
 | `ecoz sms` | Read and answer your phone's texts in a window (switch it on in the app first). |
 | `ecoz hotspot [on\|off\|test]` | When the laptop has no internet and the phone is close, make the phone offer its hotspot switch. `test` pretends to be offline for a minute. |
 | `ecoz confirm [on\|off]` | Ask before accepting files from the phone (default on). |

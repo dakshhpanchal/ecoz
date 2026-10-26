@@ -12,7 +12,7 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gtk  # noqa: E402
+from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
 CONF = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "ecoz"
 
@@ -38,9 +38,53 @@ def flag_switch(title, subtitle, flag, on_when_present):
     return row
 
 
+def folder_row():
+    """Where files from the phone are saved, with a button to pick another folder."""
+    chosen_file = CONF / "receive-dir"
+
+    def current():
+        try:
+            return chosen_file.read_text().strip() or None
+        except OSError:
+            return None
+
+    row = Adw.ActionRow(title="Save files from the phone in", subtitle=current() or "Downloads/phone (the default)")
+    row.set_subtitle_lines(2)
+
+    def pick(*_):
+        dialog = Gtk.FileDialog(title="Save files from the phone in")
+        if current():
+            dialog.set_initial_folder(Gio.File.new_for_path(current()))
+
+        def done(dlg, result):
+            try:
+                folder = dlg.select_folder_finish(result)
+            except GLib.Error:
+                return  # cancelled
+            CONF.mkdir(parents=True, exist_ok=True)
+            chosen_file.write_text(folder.get_path())
+            row.set_subtitle(folder.get_path())
+            reset.set_sensitive(True)
+
+        dialog.select_folder(row.get_root(), None, done)
+
+    def back(*_):
+        chosen_file.unlink(missing_ok=True)
+        row.set_subtitle("Downloads/phone (the default)")
+        reset.set_sensitive(False)
+
+    choose = Gtk.Button(label="Choose…", valign=Gtk.Align.CENTER)
+    choose.connect("clicked", pick)
+    reset = Gtk.Button(label="Reset", valign=Gtk.Align.CENTER, sensitive=current() is not None)
+    reset.connect("clicked", back)
+    row.add_suffix(reset)
+    row.add_suffix(choose)
+    return row
+
+
 class SettingsWindow(Adw.ApplicationWindow):
     def __init__(self, app):
-        super().__init__(application=app, title="ecoz", default_width=520, default_height=780)
+        super().__init__(application=app, title="ecoz", default_width=520, default_height=860)
 
         files = Adw.PreferencesGroup(title="Files from the phone")
         files.add(flag_switch(
@@ -48,6 +92,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             "A notification with Accept and Decline appears before anything is saved. "
             "Turn this off to accept files from the phone automatically.",
             CONF / "confirm-incoming-off", on_when_present=False))
+        files.add(folder_row())
         note = Gtk.Label(
             label="Whether the phone asks before accepting files from the laptop is set in the ecoz app on the phone.",
             wrap=True, xalign=0, css_classes=["dim-label", "caption"], margin_top=6)

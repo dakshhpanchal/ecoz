@@ -16,6 +16,7 @@ Receives links/text from the phone over HTTPS on the LAN and opens them here.
   ecoz_daemon.py call <number>      dial a number from the phone
   ecoz_daemon.py answer|decline|hangup   answer, decline or end the phone's current call
   ecoz_daemon.py audio [connect]    hear calls on the laptop: connect the Bluetooth-paired phone's hands-free audio
+  ecoz_daemon.py folder [path|reset] show or choose where files from the phone are saved
   ecoz_daemon.py sms                open your phone's texts in a window (switch on in the phone app first)
   ecoz_daemon.py proximity [on|off] listen for the phone's Bluetooth beacon (needed for lock/unlock; default off)
   ecoz_daemon.py presence           show whether the phone is near, with the signal strength
@@ -53,6 +54,7 @@ PORT = int(os.environ.get("ECOZ_PORT", "8765"))
 CONF = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "ecoz"
 CERT, KEY, TOKEN_FILE = CONF / "cert.pem", CONF / "key.pem", CONF / "token"
 MAX_BODY = 64 * 1024
+PROGRESS_MIN_BYTES = 1024 * 1024    # show the progress window for transfers of at least this size
 MAX_SMS_BODY = 512 * 1024           # a page of conversations or messages from the phone
 MAX_NOTIFICATION_BODY = 768 * 1024  # notifications may carry an app icon and a picture
 MAX_IMAGE = 400 * 1024
@@ -343,17 +345,46 @@ SMS = SmsRelay()
 
 
 # --- file transfer -----------------------------------------------------------------
-def receive_dir():
-    """Where files from the phone land: a "phone" folder inside the XDG download folder."""
-    override = os.environ.get("ECOZ_RECEIVE_DIR")
-    if override:
-        return Path(override)
+RECEIVE_DIR_FILE = CONF / "receive-dir"   # holds the folder chosen by the user; absent = the default
+
+
+def default_receive_dir():
+    """A "phone" folder inside the XDG download folder."""
     try:
         found = subprocess.run(["xdg-user-dir", "DOWNLOAD"], capture_output=True, text=True, timeout=3).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         found = ""
     downloads = Path(found) if found and found != str(Path.home()) else Path.home() / "Downloads"
     return downloads / "phone"
+
+
+def receive_dir():
+    """Where files from the phone land: the user's choice if they made one, else Downloads/phone."""
+    override = os.environ.get("ECOZ_RECEIVE_DIR")
+    if override:
+        return Path(override)
+    try:
+        chosen = RECEIVE_DIR_FILE.read_text().strip()
+    except OSError:
+        chosen = ""
+    if chosen:
+        path = Path(chosen).expanduser()
+        if path.is_absolute():
+            return path
+    return default_receive_dir()
+
+
+def open_path(path, show_in_folder=False):
+    """Open a file (or reveal it in the file manager) without tying it to this service's lifetime."""
+    path = str(path)
+    if show_in_folder and subprocess.run(
+            ["gdbus", "call", "--session", "--dest", "org.freedesktop.FileManager1",
+             "--object-path", "/org/freedesktop/FileManager1", "--method", "org.freedesktop.FileManager1.ShowItems",
+             f"['file://{quote(path)}']", ""], capture_output=True, timeout=5).returncode == 0:
+        return
+    target = str(Path(path).parent) if show_in_folder else path
+    subprocess.run(["systemd-run", "--user", "--collect", "--quiet", "--property=KillMode=process", "xdg-open", target],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def safe_filename(raw):
@@ -454,7 +485,8 @@ class Offers:
     def request(self, files):
         """Blocks until the offer is answered. Returns the list of tickets if accepted, else None."""
         offer = {"files": files, "event": threading.Event(), "accepted": False, "desktop_id": None,
-                 "left": len(files), "done": 0, "failed": 0}
+                 "left": len(files), "done": 0, "failed": 0, "saved": [], "bytes": 0,
+                 "total": sum(f["size"] for f in files), "progress": None}
         if confirm_incoming():
             self._ask(offer)
             offer["event"].wait(self.ASK_SECONDS)
@@ -472,13 +504,15 @@ class Offers:
         else:
             shown = ", ".join(f["name"] for f in files[:3]) + (f" and {len(files) - 3} more" if len(files) > 3 else "")
             summary, body = f"Phone wants to send you {len(files)} files", f"{shown}  ({human_size(total)} in total)"
+        body += f"\nSaves to {receive_dir()}"
         try:
             reply = PHONE_NOTIFICATIONS._call(
                 "Notify",
                 ("ecoz", 0, "document-send-symbolic", GLib.markup_escape_text(summary), GLib.markup_escape_text(body),
                  ["accept", "Accept", "decline", "Decline"],
-                 # critical so it shows even in Do Not Disturb; we close it ourselves when answered
-                 {"urgency": GLib.Variant("y", 2)}, 0),
+                 # critical so it shows even in Do Not Disturb; resident so clicking the banner doesn't dismiss
+                 # it (which counts as "no"); we close it ourselves when answered
+                 {"urgency": GLib.Variant("y", 2), "resident": GLib.Variant("b", True)}, 0),
                 "(susssasa{sv}i)", "(u)")
         except Exception as e:  # no notification service: refuse rather than accept unseen
             print(f"could not ask about an incoming file: {e}", file=sys.stderr, flush=True)
@@ -536,24 +570,109 @@ class Offers:
             info = self._tickets.pop(ticket, None)
         return info if info and info["expires"] > time.time() else None
 
-    def finished(self, info, ok):
+    def finished(self, info, ok, saved=None):
         """Called after each file; one summary notification when the whole offer is done."""
         offer = info["offer"]
         with self._lock:
             offer["left"] -= 1
             offer["done" if ok else "failed"] += 1
+            if ok and saved is not None:
+                offer["saved"].append(str(saved))
             last = offer["left"] == 0
             done, failed = offer["done"], offer["failed"]
         if not last:
             return
-        files = offer["files"]
+        if offer["progress"] is not None:
+            offer["progress"].close()
+        files, saved_paths = offer["files"], offer["saved"]
         if len(files) == 1 and done == 1:
-            notify("Received from phone", f"{files[0]['name']}  ({human_size(files[0]['size'])})")
+            RECEIPTS.show("Received from phone", f"{files[0]['name']}  ({human_size(files[0]['size'])})", saved_paths)
         elif done:
-            notify("Received from phone", f"{done} file{'s' if done != 1 else ''}" + (f", {failed} failed" if failed else ""))
+            RECEIPTS.show("Received from phone",
+                          f"{done} file{'s' if done != 1 else ''}" + (f", {failed} failed" if failed else ""), saved_paths)
+        elif failed:
+            notify("Couldn't receive the file", "The transfer did not finish.")
+
+
+class Progress:
+    """The small window with a bar that shows a file arriving. A separate process, fed over a pipe."""
+
+    def __init__(self, total):
+        self._total, self._proc = total, None
+        self._last = 0.0
+
+    def update(self, name, done, force=False):
+        now = time.monotonic()
+        if not force and now - self._last < 0.15:
+            return
+        self._last = now
+        if self._proc is None:
+            if not (os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY")):
+                return
+            self._proc = subprocess.Popen(
+                [sys.executable, "-I", str(Path(__file__).with_name("ecoz_progress.py")), str(self._total)],
+                stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        self._write({"name": name, "done": done})
+
+    def close(self, failed=False):
+        self._write({"end": True, "failed": failed})
+        proc, self._proc = self._proc, None
+        if proc is not None:
+            try:
+                proc.stdin.close()
+            except OSError:
+                pass
+
+    def _write(self, message):
+        if self._proc is None or self._proc.stdin is None:
+            return
+        try:
+            self._proc.stdin.write((json.dumps(message) + "\n").encode())
+            self._proc.stdin.flush()
+        except (OSError, ValueError):
+            self._proc = None  # the window was closed: carry on receiving without it
 
 
 OFFERS = Offers()
+
+
+class Receipts:
+    """The "received" notification, with buttons to open the file or show it in the file manager."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._paths = {}  # desktop notification id -> saved paths
+
+    def show(self, summary, body, paths):
+        from gi.repository import GLib
+        buttons = []
+        if len(paths) == 1:
+            buttons += ["open", "Open"]
+        if paths:
+            buttons += ["folder", "Show in Folder"]
+        try:
+            reply = PHONE_NOTIFICATIONS._call(
+                "Notify", ("ecoz", 0, "folder-download-symbolic", GLib.markup_escape_text(summary),
+                           GLib.markup_escape_text(body), buttons, {}, -1),
+                "(susssasa{sv}i)", "(u)")
+        except Exception as e:
+            print(f"receipt notification failed: {e}", file=sys.stderr, flush=True)
+            return
+        with self._lock:
+            self._paths[reply.unpack()[0]] = list(paths)
+            if len(self._paths) > 50:
+                self._paths.pop(next(iter(self._paths)))
+
+    def action_invoked(self, desktop_id, button_id):
+        with self._lock:
+            paths = self._paths.get(desktop_id)
+        if not paths or button_id not in ("open", "folder"):
+            return False
+        open_path(paths[0], show_in_folder=(button_id == "folder"))
+        return True
+
+
+RECEIPTS = Receipts()
 
 
 class Prompts:
@@ -845,7 +964,7 @@ def watch_notification_actions():
         def on_signal(_bus, _sender, _path, _iface, _signal, params):
             desktop_id, button_id = params.unpack()
             if not (OFFERS.action_invoked(desktop_id, button_id) or PROMPTS.action_invoked(desktop_id, button_id)
-                    or CALLS.action_invoked(desktop_id, button_id)):
+                    or CALLS.action_invoked(desktop_id, button_id) or RECEIPTS.action_invoked(desktop_id, button_id)):
                 PHONE_NOTIFICATIONS.action_invoked(desktop_id, button_id)  # a mirrored phone notification
 
         def on_closed(_bus, _sender, _path, _iface, _signal, params):
@@ -1077,6 +1196,9 @@ class Handler(BaseHTTPRequestHandler):
             self.connection.settimeout(FILE_STALL_SECONDS)
             remaining = length
             began = time.monotonic()
+            offer = info["offer"]
+            if offer["progress"] is None and offer["total"] >= PROGRESS_MIN_BYTES:
+                offer["progress"] = Progress(offer["total"])
             try:
                 with open(part, "wb") as out:
                     while remaining:
@@ -1085,6 +1207,9 @@ class Handler(BaseHTTPRequestHandler):
                             break
                         out.write(chunk)
                         remaining -= len(chunk)
+                        offer["bytes"] += len(chunk)
+                        if offer["progress"] is not None:
+                            offer["progress"].update(name, offer["bytes"])
                 if remaining:
                     raise OSError("connection ended early")
                 final = unique_path(folder, name)  # re-check: another transfer may have taken the name
@@ -1094,10 +1219,12 @@ class Handler(BaseHTTPRequestHandler):
                 raise
         except OSError as e:
             print(f"receive failed: {e}", file=sys.stderr, flush=True)
+            if info["offer"]["progress"] is not None:
+                info["offer"]["progress"].close(failed=True)
             OFFERS.finished(info, False)
             return self._json(400, {"ok": False, "error": "transfer failed"})
         log_speed("received", length, time.monotonic() - began)
-        OFFERS.finished(info, True)
+        OFFERS.finished(info, True, saved=final)
         self._json(200, {"ok": True, "name": final.name})
 
     def _send_file(self, file_id):
@@ -1640,6 +1767,19 @@ def call_command(action, args):
     push("call", json.dumps(command))
 
 
+def folder_setting(args):
+    """CLI: show or change where files from the phone are saved."""
+    CONF.mkdir(parents=True, exist_ok=True)
+    if args and args[0] == "reset":
+        RECEIVE_DIR_FILE.unlink(missing_ok=True)
+    elif args:
+        path = Path(" ".join(args)).expanduser().resolve()
+        if path.exists() and not path.is_dir():
+            sys.exit(f"{path} is a file, not a folder.")
+        RECEIVE_DIR_FILE.write_text(str(path))
+    report(f"Files from the phone are saved in {receive_dir()}.")
+
+
 def open_sms():
     subprocess.Popen([sys.executable, "-I", str(Path(__file__).with_name("ecoz_sms.py"))],
                      stdin=subprocess.DEVNULL, start_new_session=True)
@@ -1781,6 +1921,8 @@ def main():
         audio_setup(sys.argv[2:])
     elif cmd in ("answer", "decline", "hangup"):
         call_command(cmd, [])
+    elif cmd == "folder":
+        folder_setting(sys.argv[2:])
     elif cmd == "sms":
         open_sms()
     elif cmd == "sms-call":
